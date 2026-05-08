@@ -25,7 +25,7 @@ def _configure_litellm_logging() -> None:
 _configure_litellm_logging()
 
 # LLM timeout configuration (seconds) - base values
-LLM_TIMEOUT_HEALTH_CHECK = 30
+LLM_TIMEOUT_HEALTH_CHECK = 120
 LLM_TIMEOUT_COMPLETION = 120
 LLM_TIMEOUT_JSON = 180  # JSON completions may take longer
 

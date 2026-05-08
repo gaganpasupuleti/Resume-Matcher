@@ -581,7 +581,10 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
 
     # Try to parse to structured JSON (optional, may fail if LLM not configured)
     try:
-        processed_data = await parse_resume_to_json(markdown_content)
+        processed_data = await asyncio.wait_for(
+            parse_resume_to_json(markdown_content),
+            timeout=200.0,
+        )
         db.update_resume(
             resume["resume_id"],
             {
@@ -591,6 +594,10 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         )
         resume["processed_data"] = processed_data
         resume["processing_status"] = "ready"
+    except asyncio.TimeoutError:
+        logger.warning(f"Resume parsing to JSON timed out for {file.filename}")
+        db.update_resume(resume["resume_id"], {"processing_status": "failed"})
+        resume["processing_status"] = "failed"
     except Exception as e:
         # LLM parsing failed, update status to failed
         logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
@@ -1414,7 +1421,10 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         )
 
     try:
-        processed_data = await parse_resume_to_json(markdown_content)
+        processed_data = await asyncio.wait_for(
+            parse_resume_to_json(markdown_content),
+            timeout=200.0,
+        )
         db.update_resume(
             resume_id,
             {
@@ -1427,6 +1437,16 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             request_id=str(uuid4()),
             resume_id=resume_id,
             processing_status="ready",
+            is_master=resume.get("is_master", False),
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"Retry processing timed out for resume {resume_id}")
+        db.update_resume(resume_id, {"processing_status": "failed"})
+        return ResumeUploadResponse(
+            message="Retry processing timed out",
+            request_id=str(uuid4()),
+            resume_id=resume_id,
+            processing_status="failed",
             is_master=resume.get("is_master", False),
         )
     except Exception as e:
