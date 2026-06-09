@@ -8,12 +8,48 @@ from typing import Any
 
 from markitdown import MarkItDown
 
-from app.llm import complete_json
+from app.llm import complete_json, get_llm_config, get_resume_parse_timeout
 from app.prompts import PARSE_RESUME_PROMPT
 from app.prompts.templates import RESUME_SCHEMA_EXAMPLE
 from app.schemas import ResumeData
 
 logger = logging.getLogger(__name__)
+
+_REQUIRED_STRING_KEYS = frozenset(
+    {
+        "name",
+        "title",
+        "email",
+        "phone",
+        "location",
+        "company",
+        "years",
+        "institution",
+        "degree",
+        "role",
+    }
+)
+
+
+def _sanitize_llm_nulls(value: Any) -> Any:
+    """Convert null to empty string for required text fields LLMs often omit."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                ""
+                if item is None and key in _REQUIRED_STRING_KEYS
+                else _sanitize_llm_nulls(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_llm_nulls(item) for item in value]
+    return value
+
+
+def get_parse_retries() -> int:
+    """Local Ollama models are slower — fewer retries keeps total wait predictable."""
+    return 1 if get_llm_config().provider == "ollama" else 2
 
 # Matches date ranges like "Jan 2020 - Dec 2023", "May 2021 - Present",
 # "January 2020 - Current", and single dates like "Jun 2023".
@@ -159,13 +195,16 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
         resume_text=markdown_text,
     )
 
+    retries = get_parse_retries()
     result = await complete_json(
         prompt=prompt,
         system_prompt="You are a JSON extraction engine. Output only valid JSON, no explanations.",
+        retries=retries,
     )
 
     # Patch dates: restore months the LLM may have dropped
     result = restore_dates_from_markdown(result, markdown_text)
+    result = _sanitize_llm_nulls(result)
 
     # Validate against schema
     validated = ResumeData.model_validate(result)

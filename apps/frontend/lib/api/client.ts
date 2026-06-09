@@ -7,6 +7,9 @@
 const DEFAULT_PUBLIC_API_URL = '/';
 const INTERNAL_API_ORIGIN = 'http://127.0.0.1:8000';
 
+/** Resume upload/retry with local Ollama can exceed cloud API latencies */
+export const RESUME_PROCESS_TIMEOUT_MS = 900_000;
+
 function normalizeApiUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed === '/') {

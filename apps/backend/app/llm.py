@@ -634,6 +634,13 @@ def _calculate_timeout(
     return int(base * token_factor * provider_factor)
 
 
+def get_resume_parse_timeout(retries: int = 2) -> float:
+    """Timeout for resume JSON parsing (must exceed per-attempt LLM timeout × attempts)."""
+    config = get_llm_config()
+    per_attempt = _calculate_timeout("json", 4096, config.provider)
+    return float(per_attempt * (retries + 1) + 30)
+
+
 def _extract_json(content: str, _depth: int = 0) -> str:
     """Extract JSON from LLM response, handling various formats.
 

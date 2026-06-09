@@ -2,7 +2,14 @@ import { ImprovedResult } from '@/components/common/resume_previewer_context';
 import type { ResumeData } from '@/components/dashboard/resume-component';
 import { type TemplateSettings } from '@/lib/types/template-settings';
 import { type Locale } from '@/i18n/config';
-import { API_BASE, apiPost, apiPatch, apiDelete, apiFetch } from './client';
+import {
+  API_BASE,
+  RESUME_PROCESS_TIMEOUT_MS,
+  apiPost,
+  apiPatch,
+  apiDelete,
+  apiFetch,
+} from './client';
 
 // Matches backend schemas/models.py ResumeData
 interface ProcessedResume {
@@ -355,7 +362,11 @@ export async function generateOutreachMessage(resumeId: string): Promise<string>
 
 /** Retries AI processing for a failed resume */
 export async function retryProcessing(resumeId: string): Promise<ResumeUploadResponse> {
-  const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/retry-processing`, {});
+  const res = await apiPost(
+    `/resumes/${encodeURIComponent(resumeId)}/retry-processing`,
+    {},
+    RESUME_PROCESS_TIMEOUT_MS
+  );
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to retry processing (status ${res.status}): ${text}`);

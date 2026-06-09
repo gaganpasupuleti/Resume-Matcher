@@ -41,7 +41,13 @@ from app.schemas import (
     UpdateTitleRequest,
     normalize_resume_data,
 )
-from app.services.parser import parse_document, parse_resume_to_json, restore_dates_from_markdown
+from app.llm import get_resume_parse_timeout
+from app.services.parser import (
+    get_parse_retries,
+    parse_document,
+    parse_resume_to_json,
+    restore_dates_from_markdown,
+)
 from app.services.improver import (
     extract_job_keywords,
     generate_improvements,
@@ -581,9 +587,10 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
 
     # Try to parse to structured JSON (optional, may fail if LLM not configured)
     try:
+        parse_timeout = get_resume_parse_timeout(retries=get_parse_retries())
         processed_data = await asyncio.wait_for(
             parse_resume_to_json(markdown_content),
-            timeout=200.0,
+            timeout=parse_timeout,
         )
         db.update_resume(
             resume["resume_id"],
@@ -595,7 +602,9 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         resume["processed_data"] = processed_data
         resume["processing_status"] = "ready"
     except asyncio.TimeoutError:
-        logger.warning(f"Resume parsing to JSON timed out for {file.filename}")
+        logger.warning(
+            f"Resume parsing to JSON timed out for {file.filename} after {parse_timeout:.0f}s"
+        )
         db.update_resume(resume["resume_id"], {"processing_status": "failed"})
         resume["processing_status"] = "failed"
     except Exception as e:
@@ -1421,9 +1430,10 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         )
 
     try:
+        parse_timeout = get_resume_parse_timeout(retries=get_parse_retries())
         processed_data = await asyncio.wait_for(
             parse_resume_to_json(markdown_content),
-            timeout=200.0,
+            timeout=parse_timeout,
         )
         db.update_resume(
             resume_id,
@@ -1440,7 +1450,9 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             is_master=resume.get("is_master", False),
         )
     except asyncio.TimeoutError:
-        logger.warning(f"Retry processing timed out for resume {resume_id}")
+        logger.warning(
+            f"Retry processing timed out for resume {resume_id} after {parse_timeout:.0f}s"
+        )
         db.update_resume(resume_id, {"processing_status": "failed"})
         return ResumeUploadResponse(
             message="Retry processing timed out",

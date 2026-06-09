@@ -73,6 +73,13 @@ def _coerce_optional_text(value: Any) -> str | None:
     return text or None
 
 
+def _coerce_required_text(value: Any) -> str:
+    """Coerce LLM null/missing values into empty strings for required fields."""
+    if value is None:
+        return ""
+    return _coerce_text(value)
+
+
 def _split_description_lines(value: str) -> list[str]:
     """Split a description block into clean bullet lines."""
     items: list[str] = []
@@ -130,6 +137,11 @@ class PersonalInfo(BaseModel):
     linkedin: str | None = None
     github: str | None = None
 
+    @field_validator("name", "title", "email", "phone", "location", mode="before")
+    @classmethod
+    def _normalize_required_strings(cls, value: Any) -> str:
+        return _coerce_required_text(value)
+
 
 class Experience(BaseModel):
     """Work experience entry."""
@@ -140,6 +152,11 @@ class Experience(BaseModel):
     location: str | None = None
     years: str = ""
     description: list[str] = Field(default_factory=list)
+
+    @field_validator("title", "company", "years", mode="before")
+    @classmethod
+    def _normalize_required_strings(cls, value: Any) -> str:
+        return _coerce_required_text(value)
 
     @field_validator("description", mode="before")
     @classmethod
@@ -155,6 +172,11 @@ class Education(BaseModel):
     degree: str = ""
     years: str = ""
     description: str | None = None
+
+    @field_validator("institution", "degree", "years", mode="before")
+    @classmethod
+    def _normalize_required_strings(cls, value: Any) -> str:
+        return _coerce_required_text(value)
 
     @field_validator("description", mode="before")
     @classmethod
@@ -172,6 +194,11 @@ class Project(BaseModel):
     github: str | None = None
     website: str | None = None
     description: list[str] = Field(default_factory=list)
+
+    @field_validator("name", "role", "years", mode="before")
+    @classmethod
+    def _normalize_required_strings(cls, value: Any) -> str:
+        return _coerce_required_text(value)
 
     @field_validator("description", mode="before")
     @classmethod
@@ -221,6 +248,11 @@ class CustomSectionItem(BaseModel):
     location: str | None = None
     years: str = ""
     description: list[str] = Field(default_factory=list)
+
+    @field_validator("title", "years", mode="before")
+    @classmethod
+    def _normalize_required_strings(cls, value: Any) -> str:
+        return _coerce_required_text(value)
 
     @field_validator("description", mode="before")
     @classmethod

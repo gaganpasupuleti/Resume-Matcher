@@ -1,0 +1,12 @@
+# Resume Matcher on Railway — uses root Dockerfile (frontend + backend in one service).
+# Docs: https://docs.railway.com/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Proxied through Next.js on the public PORT
+healthcheckPath = "/api/v1/health"
+healthcheckTimeout = 180
+restartPolicyType = "ON_FAILURE"

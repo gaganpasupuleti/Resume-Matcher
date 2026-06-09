@@ -11,8 +11,18 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Internal port configuration for single-port deployment.
-FRONTEND_PORT="3000"
+# Railway and other PaaS set PORT; default 3000 for local Docker Compose.
+FRONTEND_PORT="${PORT:-3000}"
 BACKEND_PORT="8000"
+
+# Auto-configure public URL for PDF export (Playwright hits frontend print routes).
+if [ -z "${FRONTEND_BASE_URL:-}" ]; then
+    if [ -n "${RAILWAY_STATIC_URL:-}" ]; then
+        export FRONTEND_BASE_URL="${RAILWAY_STATIC_URL}"
+    elif [ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]; then
+        export FRONTEND_BASE_URL="https://${RAILWAY_PUBLIC_DOMAIN}"
+    fi
+fi
 
 # Print banner
 print_banner() {
