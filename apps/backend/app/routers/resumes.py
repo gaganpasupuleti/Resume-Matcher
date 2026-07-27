@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
+from pydantic import ValidationError
 
 from app.database import db
 from app.pdf import render_resume_pdf, PDFRenderError
@@ -45,7 +46,7 @@ from app.schemas import (
     normalize_resume_data,
 )
 from app.llm import get_resume_parse_timeout
-from app.providers.errors import ProviderError
+from app.providers.errors import ProviderError, ProviderErrorClass
 from app.services.parser import (
     ExtractionError,
     ExtractionReason,
@@ -55,6 +56,7 @@ from app.services.parser import (
     get_parse_retries,
     parse_resume_to_json,
     restore_dates_from_markdown,
+    schema_failure_fields,
     validate_upload,
 )
 from app.services.improver import (
@@ -161,6 +163,71 @@ def _raise_improve_error(
 ) -> NoReturn:
     logger.error("Resume %s failed during %s: %s", action, stage, error)
     raise HTTPException(status_code=500, detail=detail)
+
+
+def _map_improve_exception(action: str, stage: str, error: Exception) -> NoReturn:
+    """Map improve-flow failures to stable HTTP statuses (4xx/5xx)."""
+    if isinstance(error, HTTPException):
+        raise error
+    if isinstance(error, ProviderError):
+        status = (
+            503
+            if error.error_class
+            in (
+                ProviderErrorClass.UNAVAILABLE,
+                ProviderErrorClass.TIMEOUT,
+                ProviderErrorClass.CAPACITY,
+                ProviderErrorClass.MODEL_MISSING,
+            )
+            else 502
+        )
+        logger.error(
+            "Resume %s provider failure during %s correlation_id=%s error_code=%s",
+            action,
+            stage,
+            error.correlation_id,
+            error.error_code,
+        )
+        raise HTTPException(
+            status_code=status,
+            detail={
+                "message": (
+                    "AI provider unavailable. Existing resume data was not modified."
+                    if status == 503
+                    else "AI provider returned an invalid response. Existing resume data was not modified."
+                ),
+                "error_code": error.error_code,
+                "correlation_id": error.correlation_id,
+                "stage": stage,
+            },
+        )
+    if isinstance(error, ValidationError):
+        fields = schema_failure_fields(error)
+        logger.error(
+            "Resume %s schema validation failed during %s fields=%s",
+            action,
+            stage,
+            fields,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Tailored resume failed schema validation.",
+                "error_code": "schema_invalid",
+                "fields": fields,
+                "stage": stage,
+            },
+        )
+    if isinstance(error, ValueError):
+        logger.warning("Resume %s rejected during %s: %s", action, stage, error)
+        raise HTTPException(status_code=400, detail=str(error) or "Invalid improve request.")
+    _raise_improve_error(
+        action,
+        stage,
+        error,
+        f"Failed to {action} resume. Please try again.",
+    )
+
 
 
 def _get_original_resume_data(resume: dict[str, Any]) -> dict[str, Any] | None:
@@ -646,19 +713,21 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     except Exception as e:
         # Keep extracted markdown; never discard upload on AI failure.
         mapped = classify_ai_failure(e)
+        failure_fields = schema_failure_fields(e)
         logger.warning(
-            "Resume parsing to JSON failed for %s (%s): %s",
+            "Resume parsing to JSON failed for %s (%s): %s fields=%s",
             filename,
             mapped.value,
             type(e).__name__,
+            failure_fields,
         )
-        db.update_resume(
-            resume["resume_id"],
-            {
-                "processing_status": "failed",
-                "ai_failure_reason": mapped.value,
-            },
-        )
+        updates: dict[str, Any] = {
+            "processing_status": "failed",
+            "ai_failure_reason": mapped.value,
+        }
+        if failure_fields:
+            updates["ai_failure_fields"] = failure_fields
+        db.update_resume(resume["resume_id"], updates)
         resume["processing_status"] = "failed"
         ai_status = (
             "unavailable"
@@ -670,10 +739,16 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
             else "failed"
         )
         reason_code = mapped.value
-        message = (
-            f"File {filename} uploaded; AI normalization unavailable. "
-            "Extracted text was kept — you can retry."
-        )
+        if failure_fields:
+            message = (
+                f"File {filename} uploaded; AI normalization failed schema validation "
+                f"at {', '.join(failure_fields[:3])}. Extracted text was kept — you can retry."
+            )
+        else:
+            message = (
+                f"File {filename} uploaded; AI normalization unavailable. "
+                "Extracted text was kept — you can retry."
+            )
 
     return ResumeUploadResponse(
         message=message,
@@ -692,12 +767,12 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
 
 @router.get("", response_model=ResumeFetchResponse)
 async def get_resume(resume_id: str = Query(...)) -> ResumeFetchResponse:
-    """Fetch resume details by ID.
+    """Fetch resume details by ID (query param — frontend default)."""
+    return _fetch_resume_response(resume_id)
 
-    Returns both raw markdown and structured data (if available),
-    plus cover letter and outreach message if they exist.
-    Applies lazy migration for section metadata if needed.
-    """
+
+def _fetch_resume_response(resume_id: str) -> ResumeFetchResponse:
+    """Shared fetch builder for query and path GET variants."""
     resume = db.get_resume(resume_id)
 
     if not resume:
@@ -809,7 +884,7 @@ async def improve_resume_preview_endpoint(
             detail="Resume tailoring timed out. Please try again with a shorter job description or a simpler prompt.",
         )
     except Exception as e:
-        _raise_improve_error("preview", stage, e, detail)
+        _map_improve_exception("preview", stage, e)
 
 
 async def _improve_preview_flow(
@@ -1119,7 +1194,7 @@ async def improve_resume_confirm_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        _raise_improve_error("confirm", stage, e, detail)
+        _map_improve_exception("confirm", stage, e)
 
 
 @router.post("/improve", response_model=ImproveResumeResponse)
@@ -1320,11 +1395,7 @@ async def improve_resume_endpoint(
         )
 
     except Exception as e:
-        logger.error(f"Resume improvement failed: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to improve resume. Please try again.",
-        )
+        _map_improve_exception("improve", "improve_flow", e)
 
 
 @router.patch("/{resume_id}", response_model=ResumeFetchResponse)
@@ -1352,28 +1423,13 @@ async def update_resume_endpoint(
     if not updated:
         raise HTTPException(status_code=500, detail="Failed to update resume")
 
-    raw_resume = RawResume(
-        id=None,
-        content=updated["content"],
-        content_type=updated["content_type"],
-        created_at=updated["created_at"],
-        processing_status=updated.get("processing_status", "pending"),
-    )
+    return _fetch_resume_response(resume_id)
 
-    processed_resume = (
-        ResumeData.model_validate(updated.get("processed_data"))
-        if updated.get("processed_data")
-        else None
-    )
 
-    return ResumeFetchResponse(
-        request_id=str(uuid4()),
-        data=ResumeFetchData(
-            resume_id=resume_id,
-            raw_resume=raw_resume,
-            processed_resume=processed_resume,
-        ),
-    )
+@router.get("/{resume_id}", response_model=ResumeFetchResponse)
+async def get_resume_by_path(resume_id: str) -> ResumeFetchResponse:
+    """Fetch resume details by path ID (REST alias; registered after /list)."""
+    return _fetch_resume_response(resume_id)
 
 
 @router.get("/{resume_id}/pdf")
@@ -1569,21 +1625,29 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
         )
     except Exception as e:
         mapped = classify_ai_failure(e)
+        failure_fields = schema_failure_fields(e)
         logger.warning(
-            "Retry processing failed for resume %s (%s): %s",
+            "Retry processing failed for resume %s (%s): %s fields=%s",
             resume_id,
             mapped.value,
             type(e).__name__,
+            failure_fields,
         )
-        db.update_resume(
-            resume_id,
-            {
-                "processing_status": "failed",
-                "ai_failure_reason": mapped.value,
-            },
-        )
+        updates: dict[str, Any] = {
+            "processing_status": "failed",
+            "ai_failure_reason": mapped.value,
+        }
+        if failure_fields:
+            updates["ai_failure_fields"] = failure_fields
+        db.update_resume(resume_id, updates)
+        message = "AI normalization unavailable. Extracted text was kept — you can retry."
+        if failure_fields:
+            message = (
+                "AI normalization failed schema validation at "
+                f"{', '.join(failure_fields[:3])}. Extracted text was kept — you can retry."
+            )
         return ResumeUploadResponse(
-            message="AI normalization unavailable. Extracted text was kept — you can retry.",
+            message=message,
             request_id=str(uuid4()),
             resume_id=resume_id,
             processing_status="failed",

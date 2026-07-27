@@ -165,11 +165,14 @@ def analyze_keyword_gaps(
     tailored_text = _extract_all_text(tailored).lower()
     master_text = _extract_all_text(master).lower()
 
-    # Get all keywords from JD
+    # Get all keywords from JD (explicit nulls are common from Ollama extract)
+    def _kw_list(value: Any) -> list[Any]:
+        return value if isinstance(value, list) else []
+
     all_jd_keywords: set[str] = set()
-    all_jd_keywords.update(jd_keywords.get("required_skills", []))
-    all_jd_keywords.update(jd_keywords.get("preferred_skills", []))
-    all_jd_keywords.update(jd_keywords.get("keywords", []))
+    all_jd_keywords.update(_kw_list(jd_keywords.get("required_skills")))
+    all_jd_keywords.update(_kw_list(jd_keywords.get("preferred_skills")))
+    all_jd_keywords.update(_kw_list(jd_keywords.get("keywords")))
 
     # Find missing keywords
     missing: list[str] = []
@@ -537,10 +540,13 @@ def calculate_keyword_match(
     """
     resume_text = _extract_all_text(resume).lower()
 
+    def _kw_list(value: Any) -> list[Any]:
+        return value if isinstance(value, list) else []
+
     all_keywords: set[str] = set()
-    all_keywords.update(jd_keywords.get("required_skills", []))
-    all_keywords.update(jd_keywords.get("preferred_skills", []))
-    all_keywords.update(jd_keywords.get("keywords", []))
+    all_keywords.update(_kw_list(jd_keywords.get("required_skills")))
+    all_keywords.update(_kw_list(jd_keywords.get("preferred_skills")))
+    all_keywords.update(_kw_list(jd_keywords.get("keywords")))
 
     # SVC-009: Return 0% if no keywords (not 100% - that's misleading)
     if not all_keywords:
