@@ -26,6 +26,8 @@ from app.schemas import (
     ImproveResumeRequest,
     ImproveResumeResponse,
     ImproveResumeData,
+    JDAnalysisRequest,
+    JDAnalysisResponse,
     RefinementStats,
     ResumeDiffSummary,
     ResumeFieldDiff,
@@ -36,12 +38,14 @@ from app.schemas import (
     ResumeSummary,
     ResumeUploadResponse,
     RawResume,
+    ScoreBreakdownItem,
     UpdateCoverLetterRequest,
     UpdateOutreachMessageRequest,
     UpdateTitleRequest,
     normalize_resume_data,
 )
 from app.llm import get_resume_parse_timeout
+from app.providers.errors import ProviderError
 from app.services.parser import (
     ExtractionError,
     ExtractionReason,
@@ -62,9 +66,12 @@ from app.services.refiner import refine_resume, calculate_keyword_match
 from app.schemas.refinement import RefinementConfig
 from app.services.cover_letter import (
     generate_cover_letter,
+    generate_cover_letter_result,
     generate_outreach_message,
+    generate_outreach_message_result,
     generate_resume_title,
 )
+from app.services.jd_matcher import analyze_jd_match
 from app.prompts import DEFAULT_IMPROVE_PROMPT_ID, IMPROVE_PROMPT_OPTIONS
 
 
@@ -1599,20 +1606,20 @@ async def update_cover_letter(
         raise HTTPException(status_code=404, detail="Resume not found")
 
     db.update_resume(resume_id, {"cover_letter": request.content})
-    return {"message": "Cover letter updated successfully"}
+    return {"message": "Cover letter updated successfully", "editable": True}
 
 
 @router.patch("/{resume_id}/outreach-message")
 async def update_outreach_message(
     resume_id: str, request: UpdateOutreachMessageRequest
 ) -> dict:
-    """Update the outreach message for a resume."""
+    """Update the outreach / application email for a resume."""
     resume = db.get_resume(resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
     db.update_resume(resume_id, {"outreach_message": request.content})
-    return {"message": "Outreach message updated successfully"}
+    return {"message": "Outreach message updated successfully", "editable": True}
 
 
 @router.patch("/{resume_id}/title")
@@ -1625,6 +1632,54 @@ async def update_title(resume_id: str, request: UpdateTitleRequest) -> dict:
     title = request.title.strip()[:80]
     db.update_resume(resume_id, {"title": title})
     return {"message": "Title updated successfully"}
+
+
+@router.post("/{resume_id}/jd-analysis", response_model=JDAnalysisResponse)
+async def jd_analysis_endpoint(
+    resume_id: str,
+    request: JDAnalysisRequest,
+) -> JDAnalysisResponse:
+    """Deterministic JD match analysis with optional Ollama enhancement."""
+    resume = db.get_resume(resume_id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    resume_data = resume.get("processed_data")
+    if not resume_data or not isinstance(resume_data, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Resume has no processed data. Upload and wait for processing.",
+        )
+
+    job = db.get_job(request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = await analyze_jd_match(
+        resume_data,
+        job.get("content") or "",
+        use_ollama=request.use_ollama,
+    )
+
+    return JDAnalysisResponse(
+        overall_score=float(result.get("overall_score") or 0),
+        breakdown=[
+            ScoreBreakdownItem(**item) for item in (result.get("breakdown") or [])
+        ],
+        matched_keywords=list(result.get("matched_keywords") or []),
+        missing_keywords=list(result.get("missing_keywords") or []),
+        strengths=list(result.get("strengths") or []),
+        gaps=list(result.get("gaps") or []),
+        recommendations=list(result.get("recommendations") or []),
+        warnings=list(result.get("warnings") or []),
+        sections_present=dict(result.get("sections_present") or {}),
+        enhancement_status=str(result.get("enhancement_status") or "skipped"),
+        cached=bool(result.get("cached")),
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
+        cache_key=result.get("cache_key"),
+        enhancement=result.get("enhancement"),
+    )
 
 
 @router.post(
@@ -1679,30 +1734,48 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
     # Get language setting
     language = _get_content_language()
 
-    # Generate cover letter
     try:
-        cover_letter_content = await generate_cover_letter(
+        result = await generate_cover_letter_result(
             resume_data, job["content"], language
         )
+    except ProviderError as e:
+        logger.error(
+            "Cover letter generation provider error correlation_id=%s error_code=%s",
+            e.correlation_id,
+            e.error_code,
+        )
+        raise HTTPException(
+            status_code=503 if e.error_code == "unavailable" else 500,
+            detail={
+                "message": "Failed to generate cover letter. Please try again.",
+                "error_code": e.error_code,
+                "correlation_id": e.correlation_id,
+            },
+        )
     except Exception as e:
-        logger.error(f"Cover letter generation failed: {e}")
+        logger.error("Cover letter generation failed: %s", type(e).__name__)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate cover letter. Please try again.",
         )
 
-    # Save to resume record
-    db.update_resume(resume_id, {"cover_letter": cover_letter_content})
+    if result.get("content"):
+        db.update_resume(resume_id, {"cover_letter": result["content"]})
 
     return GenerateContentResponse(
-        content=cover_letter_content,
-        message="Cover letter generated successfully",
+        content=result.get("content") or "",
+        message=str(result.get("message") or "Cover letter generated successfully"),
+        warnings=list(result.get("warnings") or []),
+        insufficient=bool(result.get("insufficient")),
+        editable=True,
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
     )
 
 
 @router.post("/{resume_id}/generate-outreach", response_model=GenerateContentResponse)
 async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
-    """Generate an outreach message on-demand for an existing tailored resume.
+    """Generate an application / outreach email on-demand for a tailored resume.
 
     This endpoint allows users to generate a cold outreach message after a resume
     has been tailored. It requires:
@@ -1750,24 +1823,44 @@ async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
     # Get language setting
     language = _get_content_language()
 
-    # Generate outreach message
     try:
-        outreach_content = await generate_outreach_message(
+        result = await generate_outreach_message_result(
             resume_data, job["content"], language
         )
+    except ProviderError as e:
+        logger.error(
+            "Outreach generation provider error correlation_id=%s error_code=%s",
+            e.correlation_id,
+            e.error_code,
+        )
+        raise HTTPException(
+            status_code=503 if e.error_code == "unavailable" else 500,
+            detail={
+                "message": "Failed to generate outreach message. Please try again.",
+                "error_code": e.error_code,
+                "correlation_id": e.correlation_id,
+            },
+        )
     except Exception as e:
-        logger.error(f"Outreach message generation failed: {e}")
+        logger.error("Outreach message generation failed: %s", type(e).__name__)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate outreach message. Please try again.",
         )
 
-    # Save to resume record
-    db.update_resume(resume_id, {"outreach_message": outreach_content})
+    if result.get("content"):
+        db.update_resume(resume_id, {"outreach_message": result["content"]})
 
     return GenerateContentResponse(
-        content=outreach_content,
-        message="Outreach message generated successfully",
+        content=result.get("content") or "",
+        message=str(
+            result.get("message") or "Application email generated successfully"
+        ),
+        warnings=list(result.get("warnings") or []),
+        insufficient=bool(result.get("insufficient")),
+        editable=True,
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
     )
 
 

@@ -365,6 +365,8 @@ Requirements:
 - If resume shows career transition, frame the pivot as intentional and relevant
 - Extract company name from job description - do not use placeholders
 - Do NOT invent information not in the resume
+- Do NOT invent skills, employers, degrees, or numeric metrics
+- If the resume lacks evidence for a claim, omit the claim
 - Tone: Confident peer, not eager applicant
 - Do NOT use em dash ("—") anywhere in the writing/output, even if it exists, remove it
 
@@ -383,9 +385,10 @@ Candidate Resume (JSON):
 Guidelines:
 - 70-100 words maximum (shorter than a cover letter)
 - First sentence: Reference specific detail from job description (team, product, technical challenge) - never open with "I'm reaching out" or "I saw your posting"
-- One sentence on strongest matching qualification with a concrete metric if available
+- One sentence on strongest matching qualification with a concrete metric if available in the resume only
 - End with low-friction ask: "Worth a quick chat?" not "I'd love the opportunity to discuss"
 - Tone: How you'd message a former colleague, not a stranger
+- Do NOT invent experience, skills, employers, or metrics
 - Do NOT include placeholder brackets
 - Do NOT use phrases like "excited about" or "passionate about"
 - Do NOT use em dash ("—") anywhere in the writing/output, even if it exists, remove it

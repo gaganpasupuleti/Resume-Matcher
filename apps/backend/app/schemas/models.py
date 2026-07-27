@@ -722,6 +722,48 @@ class GenerateContentResponse(BaseModel):
 
     content: str
     message: str
+    warnings: list[str] = Field(default_factory=list)
+    insufficient: bool = False
+    editable: bool = True
+    correlation_id: str | None = None
+    provider: dict[str, Any] | None = None
+
+
+class JDAnalysisRequest(BaseModel):
+    """Request to analyze resume vs a job description."""
+
+    job_id: str
+    use_ollama: bool = True
+
+
+class ScoreBreakdownItem(BaseModel):
+    """Single explained score component."""
+
+    id: str
+    label: str
+    score: float
+    weight: float
+    reason: str
+
+
+class JDAnalysisResponse(BaseModel):
+    """Deterministic (+ optional Ollama) JD match analysis."""
+
+    overall_score: float
+    breakdown: list[ScoreBreakdownItem]
+    matched_keywords: list[str]
+    missing_keywords: list[str]
+    strengths: list[str]
+    gaps: list[str]
+    recommendations: list[str]
+    warnings: list[str] = Field(default_factory=list)
+    sections_present: dict[str, bool] = Field(default_factory=dict)
+    enhancement_status: str = "skipped"
+    cached: bool = False
+    correlation_id: str | None = None
+    provider: dict[str, Any] | None = None
+    cache_key: dict[str, str] | None = None
+    enhancement: dict[str, Any] | None = None
 
 
 # Health/Status Models
