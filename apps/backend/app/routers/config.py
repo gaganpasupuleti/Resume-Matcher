@@ -8,6 +8,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.config import settings
 from app.llm import check_llm_health, LLMConfig, resolve_api_key
+from app.providers.errors import ProviderError
+from app.providers.policy import assert_provider_allowed, is_codequest_local_mode
 from app.schemas import (
     LLMConfigRequest,
     LLMConfigResponse,
@@ -118,7 +120,10 @@ async def update_llm_config(
 
     # Update only provided fields
     if request.provider is not None:
-        stored["provider"] = request.provider
+        try:
+            stored["provider"] = assert_provider_allowed(request.provider)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
     if request.model is not None:
         stored["model"] = request.model
     if request.api_key is not None:
@@ -128,6 +133,9 @@ async def update_llm_config(
 
     # Build normalized config for response and background health check
     resolved_provider = stored.get("provider", settings.llm_provider)
+    if is_codequest_local_mode():
+        resolved_provider = "ollama"
+        stored["provider"] = "ollama"
     test_config = LLMConfig(
         provider=resolved_provider,
         model=stored.get("model", settings.llm_model),
@@ -164,6 +172,13 @@ async def test_llm_connection(request: LLMConfigRequest | None = None) -> dict:
         if request and request.provider
         else stored.get("provider", settings.llm_provider)
     )
+    if is_codequest_local_mode():
+        test_provider = "ollama"
+    else:
+        try:
+            test_provider = assert_provider_allowed(test_provider)
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=exc.to_dict()) from exc
     config = LLMConfig(
         provider=test_provider,
         model=(

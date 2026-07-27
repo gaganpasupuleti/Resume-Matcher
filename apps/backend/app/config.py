@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -128,14 +128,33 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_api_base: str | None = None  # For Ollama or custom endpoints
     log_llm: Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"] = "WARNING"
+    # Code Quest Lab local mode: Ollama-only; paid/cloud providers stay disabled.
+    codequest_local_mode: bool = False
 
     @field_validator("llm_provider", mode="before")
     @classmethod
     def set_default_provider(cls, v: Any) -> str:
-        """Handle empty string provider by defaulting to openai."""
+        """Handle empty string provider by defaulting to openai (standalone)."""
         if not v or (isinstance(v, str) and not v.strip()):
             return "openai"
         return v
+
+    @model_validator(mode="after")
+    def apply_codequest_local_defaults(self) -> "Settings":
+        """When CODEQUEST_LOCAL_MODE=true, default to Ollama and never keep paid defaults."""
+        if not self.codequest_local_mode:
+            return self
+        object.__setattr__(self, "llm_provider", "ollama")
+        # Replace product cloud defaults; keep an explicit Ollama model if already set.
+        cloudish = self.llm_model.startswith("gpt-") or self.llm_model in {
+            "gpt-5-nano-2025-08-07",
+            "",
+        }
+        if cloudish:
+            object.__setattr__(self, "llm_model", "gemma3:4b")
+        if not self.llm_api_base:
+            object.__setattr__(self, "llm_api_base", "http://localhost:11434")
+        return self
 
     @field_validator("log_llm", mode="before")
     @classmethod
