@@ -93,6 +93,15 @@ describe('embed status states', () => {
     expect(screen.getByTestId('embed-state-parsing-failed')).toBeInTheDocument();
   });
 
+  it('shows ollama unavailable and model missing', () => {
+    const { rerender } = render(
+      <EmbedStatusBanner state="ollama-unavailable" settingsHref="/settings" />
+    );
+    expect(screen.getByTestId('embed-state-ollama-unavailable')).toBeInTheDocument();
+    rerender(<EmbedStatusBanner state="model-missing" settingsHref="/settings" />);
+    expect(screen.getByTestId('embed-state-model-missing')).toBeInTheDocument();
+  });
+
   it('renders nothing when ready', () => {
     const { container } = render(
       <EmbedStatusBanner state="ready" settingsHref="/settings" />

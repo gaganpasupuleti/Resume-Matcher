@@ -97,7 +97,18 @@
       "dropzoneTitle": "点击或拖拽文件",
       "dropzoneSubtitle": "PDF、DOC、DOCX（最大 4MB）",
       "tryDifferentFile": "尝试其他文件",
-      "parsingFailedKeepOpen": "AI 解析失败。请尝试其他文件，或关闭此对话框。"
+      "parsingFailedKeepOpen": "AI 解析失败。请尝试其他文件，或关闭此对话框。",
+      "phaseUpload": "Uploading file…",
+      "phaseExtract": "Extracting text…",
+      "phaseAi": "AI normalizing…",
+      "aiFailedKeptExtract": "AI normalization failed. Extracted text was kept — retry without re-uploading.",
+      "extractionUnusable": "Extracted text is too thin (possibly a scan). Retry will not help until you upload a text-based PDF/DOCX.",
+      "extractKeptTitle": "Extracted text kept",
+      "charCount": "{count} characters extracted",
+      "sectionHints": "Sections detected: {hints}",
+      "ocrNeeded": "OCR may be needed for this file.",
+      "reasonCode": "Reason: {code}",
+      "retryKeepsExtract": "Retry reuses the stored extract. Your upload is not discarded."
     }
   },
   "builder": {
@@ -275,7 +286,15 @@
         "keywordsExtracted": "已提取 {count} 个关键词",
         "matchesFound": "已匹配 {count} 处",
         "matchRateLabel": "匹配率："
-      }
+      },
+      "analyzing": "Analyzing match…",
+      "analysisFailed": "Could not load JD analysis.",
+      "overallScore": "Overall match",
+      "refreshAnalysis": "Refresh",
+      "matchedKeywords": "Matched keywords",
+      "missingKeywords": "Missing keywords",
+      "noMatchedKeywords": "No matched keywords yet.",
+      "noMissingKeywords": "No missing keywords detected."
     },
     "genericItemForm": {
       "itemLabel": "条目",
@@ -448,8 +467,11 @@
       "coverLetterDownloadFailed": "下载求职信失败：{error}",
       "outreachSaveFailed": "保存联系邮件失败，请重试。",
       "coverLetterGenerateFailed": "生成求职信失败：{error}",
-      "outreachGenerateFailed": "生成联系邮件失败：{error}"
-    }
+      "outreachGenerateFailed": "生成联系邮件失败：{error}",
+      "saveSuccess": "Resume saved.",
+      "generationInsufficient": "Generated with limited resume data — review carefully before sending."
+    },
+    "lastSaved": "Last saved {time}"
   },
   "enrichment": {
     "title": "简历增强",
@@ -719,7 +741,8 @@
       "failedToLoad": "加载简历数据失败。",
       "failedToDelete": "删除简历失败，请重试。"
     },
-    "titlePlaceholder": "输入简历标题..."
+    "titlePlaceholder": "输入简历标题...",
+    "extractedTextTitle": "Extracted text (fallback)"
   },
   "preview": {
     "margins": "页边距",

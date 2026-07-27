@@ -97,7 +97,18 @@
       "dropzoneTitle": "Clique ou Arraste o Arquivo",
       "dropzoneSubtitle": "PDF, DOC, DOCX (Máximo 4MB)",
       "tryDifferentFile": "Tentar outro arquivo",
-      "parsingFailedKeepOpen": "A análise de IA falhou. Tente outro arquivo ou feche este diálogo."
+      "parsingFailedKeepOpen": "A análise de IA falhou. Tente outro arquivo ou feche este diálogo.",
+      "phaseUpload": "Uploading file…",
+      "phaseExtract": "Extracting text…",
+      "phaseAi": "AI normalizing…",
+      "aiFailedKeptExtract": "AI normalization failed. Extracted text was kept — retry without re-uploading.",
+      "extractionUnusable": "Extracted text is too thin (possibly a scan). Retry will not help until you upload a text-based PDF/DOCX.",
+      "extractKeptTitle": "Extracted text kept",
+      "charCount": "{count} characters extracted",
+      "sectionHints": "Sections detected: {hints}",
+      "ocrNeeded": "OCR may be needed for this file.",
+      "reasonCode": "Reason: {code}",
+      "retryKeepsExtract": "Retry reuses the stored extract. Your upload is not discarded."
     }
   },
   "builder": {
@@ -275,7 +286,15 @@
         "keywordsExtracted": "{count} palavras-chave extraídas",
         "matchesFound": "{count} correspondências encontradas",
         "matchRateLabel": "Taxa de Correspondência:"
-      }
+      },
+      "analyzing": "Analyzing match…",
+      "analysisFailed": "Could not load JD analysis.",
+      "overallScore": "Overall match",
+      "refreshAnalysis": "Refresh",
+      "matchedKeywords": "Matched keywords",
+      "missingKeywords": "Missing keywords",
+      "noMatchedKeywords": "No matched keywords yet.",
+      "noMissingKeywords": "No missing keywords detected."
     },
     "genericItemForm": {
       "itemLabel": "Item",
@@ -448,8 +467,11 @@
       "coverLetterDownloadFailed": "Falha ao baixar carta de apresentação: {error}",
       "outreachSaveFailed": "Falha ao salvar mensagem de contato. Por favor, tente novamente.",
       "coverLetterGenerateFailed": "Falha ao gerar carta de apresentação: {error}",
-      "outreachGenerateFailed": "Falha ao gerar mensagem de contato: {error}"
-    }
+      "outreachGenerateFailed": "Falha ao gerar mensagem de contato: {error}",
+      "saveSuccess": "Resume saved.",
+      "generationInsufficient": "Generated with limited resume data — review carefully before sending."
+    },
+    "lastSaved": "Last saved {time}"
   },
   "enrichment": {
     "title": "Aprimoramento de Currículo",
@@ -719,7 +741,8 @@
       "failedToLoad": "Falha ao carregar dados do currículo.",
       "failedToDelete": "Falha ao excluir currículo. Por favor, tente novamente."
     },
-    "titlePlaceholder": "Digite o título do currículo..."
+    "titlePlaceholder": "Digite o título do currículo...",
+    "extractedTextTitle": "Extracted text (fallback)"
   },
   "preview": {
     "margins": "Margens",

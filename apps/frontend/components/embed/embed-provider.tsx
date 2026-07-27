@@ -12,6 +12,7 @@ import React, {
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useStatusCache } from '@/lib/context/status-cache';
 import { fetchResume } from '@/lib/api/resume';
+import { fetchHealthProbe } from '@/lib/api/config';
 import {
   detectEmbedMode,
   getAllowedParentOrigins,
@@ -63,6 +64,7 @@ function EmbedProviderInner({ children }: { children: React.ReactNode }) {
   const [parentTargetOrigin, setParentTargetOrigin] = useState<string | null>(null);
   const [parentAcknowledged, setParentAcknowledged] = useState(false);
   const [parsingFailed, setParsingFailed] = useState(false);
+  const [llmErrorCode, setLlmErrorCode] = useState<string | null>(null);
 
   const {
     status: systemStatus,
@@ -158,6 +160,25 @@ function EmbedProviderInner({ children }: { children: React.ReactNode }) {
     };
   }, [isEmbedMode, pathname, systemStatus?.has_master_resume]);
 
+  // Distinguish model-missing vs Ollama down when LLM is configured but unhealthy.
+  useEffect(() => {
+    if (!isEmbedMode || !systemStatus?.llm_configured || systemStatus.llm_healthy) {
+      setLlmErrorCode(null);
+      return;
+    }
+    let cancelled = false;
+    fetchHealthProbe()
+      .then((probe) => {
+        if (!cancelled) setLlmErrorCode(probe.llm?.error_code ?? 'unavailable');
+      })
+      .catch(() => {
+        if (!cancelled) setLlmErrorCode('unavailable');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEmbedMode, systemStatus?.llm_configured, systemStatus?.llm_healthy]);
+
   const withEmbedHref = useCallback(
     (path: string) => {
       if (!isEmbedMode) return path;
@@ -171,9 +192,13 @@ function EmbedProviderInner({ children }: { children: React.ReactNode }) {
     if (statusLoading && !systemStatus) return 'loading';
     if (statusError && !systemStatus) return 'backend-unavailable';
     if (systemStatus && !systemStatus.llm_configured) return 'connector-unavailable';
+    if (systemStatus && systemStatus.llm_configured && !systemStatus.llm_healthy) {
+      if (llmErrorCode === 'model_missing') return 'model-missing';
+      return 'ollama-unavailable';
+    }
     if (parsingFailed) return 'parsing-failed';
     return 'ready';
-  }, [isEmbedMode, statusLoading, statusError, systemStatus, parsingFailed]);
+  }, [isEmbedMode, statusLoading, statusError, systemStatus, parsingFailed, llmErrorCode]);
 
   const value = useMemo(
     () => ({

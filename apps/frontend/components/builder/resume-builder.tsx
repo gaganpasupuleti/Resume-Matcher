@@ -41,6 +41,7 @@ import {
   fetchJobDescription,
 } from '@/lib/api/resume';
 import { JDComparisonView } from './jd-comparison-view';
+import { JDAnalysisPanel } from './jd-analysis-panel';
 import { RegenerateWizard } from './regenerate-wizard';
 import { useRegenerateWizard } from '@/hooks/use-regenerate-wizard';
 import { useTranslations } from '@/lib/i18n';
@@ -111,6 +112,7 @@ const ResumeBuilderContent = () => {
   const [resumeData, setResumeData] = useState<ResumeData>(() => initialData);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [lastSavedData, setLastSavedData] = useState<ResumeData>(() => initialData);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [, setLoadingState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
@@ -142,6 +144,8 @@ const ResumeBuilderContent = () => {
   // Cover letter & outreach state
   const [coverLetter, setCoverLetter] = useState('');
   const [outreachMessage, setOutreachMessage] = useState('');
+  const [coverLetterWarnings, setCoverLetterWarnings] = useState<string[]>([]);
+  const [outreachWarnings, setOutreachWarnings] = useState<string[]>([]);
   const [isCoverLetterSaving, setIsCoverLetterSaving] = useState(false);
   const [isOutreachSaving, setIsOutreachSaving] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -157,6 +161,7 @@ const ResumeBuilderContent = () => {
 
   // JD comparison state
   const [jobDescription, setJobDescription] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
 
   // AI Regenerate wizard
   const regenerateWizard = useRegenerateWizard({
@@ -372,17 +377,20 @@ const ResumeBuilderContent = () => {
           const data = await fetchJobDescription(resumeId);
           if (!cancelled) {
             setJobDescription(data.content);
+            setJobId(data.job_id);
           }
         } catch (err) {
           // JD might not be available for older resumes
           if (!cancelled) {
             console.warn('Could not fetch job description:', err);
             setJobDescription(null);
+            setJobId(null);
           }
         }
       } else {
         // Clear job description when switching to non-tailored resume
         setJobDescription(null);
+        setJobId(null);
       }
     };
 
@@ -414,8 +422,10 @@ const ResumeBuilderContent = () => {
       const nextData = (updated.processed_resume || resumeData) as ResumeData;
       setResumeData(nextData);
       setLastSavedData(nextData);
+      setLastSavedAt(new Date());
       setHasUnsavedChanges(false);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(nextData));
+      showNotification(t('builder.alerts.saveSuccess'), 'success');
     } catch (error) {
       console.error('Failed to save resume:', error);
       showNotification(t('builder.alerts.saveFailed'), 'danger');
@@ -541,8 +551,12 @@ const ResumeBuilderContent = () => {
     setIsGeneratingCoverLetter(true);
     setShowRegenerateDialog(null);
     try {
-      const content = await generateCoverLetter(resumeId);
-      setCoverLetter(content);
+      const result = await generateCoverLetter(resumeId);
+      setCoverLetter(result.content);
+      setCoverLetterWarnings(result.warnings ?? []);
+      if (result.insufficient) {
+        showNotification(t('builder.alerts.generationInsufficient'), 'warning');
+      }
     } catch (error) {
       console.error('Failed to generate cover letter:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -570,8 +584,12 @@ const ResumeBuilderContent = () => {
     setIsGeneratingOutreach(true);
     setShowRegenerateDialog(null);
     try {
-      const content = await generateOutreachMessage(resumeId);
-      setOutreachMessage(content);
+      const result = await generateOutreachMessage(resumeId);
+      setOutreachMessage(result.content);
+      setOutreachWarnings(result.warnings ?? []);
+      if (result.insufficient) {
+        showNotification(t('builder.alerts.generationInsufficient'), 'warning');
+      }
     } catch (error) {
       console.error('Failed to generate outreach message:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -648,6 +666,19 @@ const ResumeBuilderContent = () => {
                   <span className="flex items-center gap-1 text-xs font-mono text-amber-600 bg-amber-50 px-2 py-1 border border-amber-200">
                     <AlertTriangle className="w-3 h-3" />
                     {t('builder.unsavedDraft')}
+                  </span>
+                )}
+                {lastSavedAt && (
+                  <span
+                    data-testid="last-saved-at"
+                    className="text-xs font-mono text-gray-500"
+                  >
+                    {t('builder.lastSaved', {
+                      time: lastSavedAt.toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      }),
+                    })}
                   </span>
                 )}
               </div>
@@ -785,6 +816,7 @@ const ResumeBuilderContent = () => {
                     onChange={setCoverLetter}
                     onSave={handleSaveCoverLetter}
                     isSaving={isCoverLetterSaving}
+                    warnings={coverLetterWarnings}
                   />
                 ) : (
                   <GeneratePrompt
@@ -798,12 +830,24 @@ const ResumeBuilderContent = () => {
               {/* Outreach Editor */}
               {activeTab === 'outreach' &&
                 (outreachMessage ? (
-                  <OutreachEditor
-                    content={outreachMessage}
-                    onChange={setOutreachMessage}
-                    onSave={handleSaveOutreach}
-                    isSaving={isOutreachSaving}
-                  />
+                  <>
+                    {outreachWarnings.length > 0 && (
+                      <div
+                        data-testid="outreach-warnings"
+                        className="p-3 border border-amber-300 bg-amber-50 font-mono text-xs text-amber-900"
+                      >
+                        {outreachWarnings.map((w) => (
+                          <p key={w}>{w}</p>
+                        ))}
+                      </div>
+                    )}
+                    <OutreachEditor
+                      content={outreachMessage}
+                      onChange={setOutreachMessage}
+                      onSave={handleSaveOutreach}
+                      isSaving={isOutreachSaving}
+                    />
+                  </>
                 ) : (
                   <GeneratePrompt
                     type="outreach"
@@ -938,7 +982,14 @@ const ResumeBuilderContent = () => {
 
               {/* JD Match Comparison */}
               {activeTab === 'jd-match' && jobDescription && (
-                <JDComparisonView jobDescription={jobDescription} resumeData={resumeData} />
+                <div className="h-full flex flex-col min-h-0">
+                  {resumeId && jobId && (
+                    <JDAnalysisPanel resumeId={resumeId} jobId={jobId} />
+                  )}
+                  <div className="flex-1 min-h-0">
+                    <JDComparisonView jobDescription={jobDescription} resumeData={resumeData} />
+                  </div>
+                </div>
               )}
             </div>
           </div>

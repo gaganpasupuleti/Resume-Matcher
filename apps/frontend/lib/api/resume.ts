@@ -82,6 +82,49 @@ export interface ResumeUploadResponse {
   resume_id: string;
   processing_status: 'pending' | 'processing' | 'ready' | 'failed';
   is_master: boolean;
+  reason_code?: string | null;
+  extraction_usable?: boolean | null;
+  ocr_needed?: boolean;
+  ai_normalization_status?: 'succeeded' | 'failed' | 'unavailable' | 'skipped' | null;
+  section_hints?: string[];
+  char_count?: number | null;
+}
+
+/** Generated cover letter / outreach payload */
+export interface GenerateContentResult {
+  content: string;
+  message?: string;
+  warnings?: string[];
+  insufficient?: boolean;
+  editable?: boolean;
+  correlation_id?: string | null;
+  provider?: Record<string, unknown> | null;
+}
+
+/** JD analysis score component */
+export interface ScoreBreakdownItem {
+  id: string;
+  label: string;
+  score: number;
+  weight: number;
+  reason: string;
+}
+
+/** Deterministic (+ optional Ollama) JD match analysis */
+export interface JDAnalysisResult {
+  overall_score: number;
+  breakdown: ScoreBreakdownItem[];
+  matched_keywords: string[];
+  missing_keywords: string[];
+  strengths: string[];
+  gaps: string[];
+  recommendations: string[];
+  warnings?: string[];
+  sections_present?: Record<string, boolean>;
+  enhancement_status?: string;
+  cached?: boolean;
+  correlation_id?: string | null;
+  provider?: Record<string, unknown> | null;
 }
 
 interface ImproveResumeConfirmRequest {
@@ -339,25 +382,40 @@ export async function downloadCoverLetterPdf(
 }
 
 /** Generates a cover letter on-demand for a tailored resume */
-export async function generateCoverLetter(resumeId: string): Promise<string> {
+export async function generateCoverLetter(resumeId: string): Promise<GenerateContentResult> {
   const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/generate-cover-letter`, {});
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to generate cover letter (status ${res.status}): ${text}`);
   }
-  const data = await res.json();
-  return data.content;
+  return res.json();
 }
 
 /** Generates an outreach message on-demand for a tailored resume */
-export async function generateOutreachMessage(resumeId: string): Promise<string> {
+export async function generateOutreachMessage(resumeId: string): Promise<GenerateContentResult> {
   const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/generate-outreach`, {});
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`Failed to generate outreach message (status ${res.status}): ${text}`);
   }
-  const data = await res.json();
-  return data.content;
+  return res.json();
+}
+
+/** Analyze resume vs job description (score breakdown + keywords) */
+export async function analyzeJdMatch(
+  resumeId: string,
+  jobId: string,
+  useOllama = true
+): Promise<JDAnalysisResult> {
+  const res = await apiPost(`/resumes/${encodeURIComponent(resumeId)}/jd-analysis`, {
+    job_id: jobId,
+    use_ollama: useOllama,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to analyze JD match (status ${res.status}): ${text}`);
+  }
+  return res.json();
 }
 
 /** Retries AI processing for a failed resume */
