@@ -400,6 +400,15 @@ class ResumeUploadResponse(BaseModel):
     resume_id: str
     processing_status: Literal["pending", "processing", "ready", "failed"] = "pending"
     is_master: bool = False
+    # Extraction / AI diagnostics (Agent J) — optional for backward compatibility
+    reason_code: str | None = None
+    extraction_usable: bool | None = None
+    ocr_needed: bool = False
+    ai_normalization_status: (
+        Literal["succeeded", "failed", "unavailable", "skipped"] | None
+    ) = None
+    section_hints: list[str] = Field(default_factory=list)
+    char_count: int | None = None
 
 
 class RawResume(BaseModel):
