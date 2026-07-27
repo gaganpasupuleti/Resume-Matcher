@@ -116,6 +116,15 @@ def _has_month_in_dates(data: dict[str, Any]) -> bool:
     return False
 
 
+def _as_list(value: Any) -> list[Any]:
+    """Coerce keyword fields to a list.
+
+    LLM / TinyDB often store explicit null for missing lists. ``dict.get(key, [])``
+    still returns None when the key exists with a null value.
+    """
+    return value if isinstance(value, list) else []
+
+
 def _prepare_keywords_for_prompt(job_keywords: dict[str, Any]) -> str:
     """Format job keywords as a focused, readable list for the LLM prompt.
 
@@ -124,18 +133,18 @@ def _prepare_keywords_for_prompt(job_keywords: dict[str, Any]) -> str:
     """
     sections: list[str] = []
 
-    required = job_keywords.get("required_skills", [])
+    required = _as_list(job_keywords.get("required_skills"))
     if required:
         sections.append("Required skills to emphasize:\n- " + "\n- ".join(str(s) for s in required))
 
-    preferred = job_keywords.get("preferred_skills", [])
+    preferred = _as_list(job_keywords.get("preferred_skills"))
     if preferred:
         sections.append(
             "Preferred skills (include only if resume supports them):\n- "
             + "\n- ".join(str(s) for s in preferred)
         )
 
-    keywords = job_keywords.get("keywords", [])
+    keywords = _as_list(job_keywords.get("keywords"))
     if keywords:
         sections.append("Additional keywords to weave in naturally:\n- " + "\n- ".join(str(k) for k in keywords))
 
@@ -632,7 +641,8 @@ def generate_improvements(job_keywords: dict[str, Any]) -> list[dict[str, Any]]:
     improvements = []
 
     # Generate suggestions based on required skills
-    required_skills = job_keywords.get("required_skills", [])
+    # ponytail: explicit nulls from Ollama keyword extract must not crash [:n]
+    required_skills = _as_list(job_keywords.get("required_skills"))
     for skill in required_skills[:3]:  # Top 3 required skills
         improvements.append(
             {
@@ -642,7 +652,7 @@ def generate_improvements(job_keywords: dict[str, Any]) -> list[dict[str, Any]]:
         )
 
     # Generate suggestions based on key responsibilities
-    responsibilities = job_keywords.get("key_responsibilities", [])
+    responsibilities = _as_list(job_keywords.get("key_responsibilities"))
     for resp in responsibilities[:2]:  # Top 2 responsibilities
         improvements.append(
             {

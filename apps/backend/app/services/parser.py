@@ -11,12 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from markitdown import MarkItDown
+from pydantic import ValidationError
 
 from app.llm import complete_json, get_llm_config
 from app.prompts import PARSE_RESUME_PROMPT
 from app.prompts.templates import RESUME_SCHEMA_EXAMPLE
 from app.providers.errors import ProviderError, ProviderErrorClass
-from app.schemas import ResumeData
+from app.schemas import CustomSection, ResumeData
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,33 @@ def _sanitize_llm_nulls(value: Any) -> Any:
     if isinstance(value, list):
         return [_sanitize_llm_nulls(item) for item in value]
     return value
+
+
+def _drop_invalid_custom_sections(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop customSections entries that fail schema validation.
+
+    Ollama often copies example keys (publications, volunteer_work) with
+    malformed shapes. Removing invalid sections preserves the rest of the
+    extract without inventing replacement content.
+    """
+    custom = data.get("customSections")
+    if custom is None:
+        data["customSections"] = {}
+        return data
+    if not isinstance(custom, dict):
+        logger.info("Dropping non-object customSections (%s)", type(custom).__name__)
+        data["customSections"] = {}
+        return data
+
+    kept: dict[str, Any] = {}
+    for key, section in custom.items():
+        try:
+            CustomSection.model_validate(section)
+            kept[str(key)] = section
+        except ValidationError:
+            logger.info("Dropping invalid custom section %s", key)
+    data["customSections"] = kept
+    return data
 
 
 def get_parse_retries() -> int:
@@ -437,6 +465,24 @@ def classify_ai_failure(error: Exception) -> ExtractionReason:
     return ExtractionReason.AI_UNAVAILABLE
 
 
+def schema_failure_fields(error: Exception, *, limit: int = 8) -> list[str]:
+    """Return dotted field paths from a Pydantic ValidationError (no values)."""
+    errors_fn = getattr(error, "errors", None)
+    if not callable(errors_fn):
+        return []
+    try:
+        raw_errors = errors_fn()
+    except Exception:
+        return []
+    fields: list[str] = []
+    for err in raw_errors[:limit]:
+        if not isinstance(err, dict):
+            continue
+        loc = err.get("loc") or ()
+        fields.append(".".join(str(part) for part in loc))
+    return fields
+
+
 async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
     """Parse resume markdown to structured JSON using LLM.
 
@@ -474,6 +520,8 @@ async def parse_resume_to_json(markdown_text: str) -> dict[str, Any]:
     # Patch dates: restore months the LLM may have dropped
     result = restore_dates_from_markdown(result, markdown_text)
     result = _sanitize_llm_nulls(result)
+    if isinstance(result, dict):
+        result = _drop_invalid_custom_sections(result)
 
     # Validate against schema — processed_data only after valid
     validated = ResumeData.model_validate(result)
@@ -499,5 +547,6 @@ __all__ = [
     "parse_document",
     "parse_resume_to_json",
     "restore_dates_from_markdown",
+    "schema_failure_fields",
     "validate_upload",
 ]
