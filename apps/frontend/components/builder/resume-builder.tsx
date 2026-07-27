@@ -49,6 +49,7 @@ import { withLocalizedDefaultSections } from '@/lib/utils/section-helpers';
 import { useLanguage } from '@/lib/context/language-context';
 import { downloadBlobAsFile, openUrlInNewTab, sanitizeFilename } from '@/lib/utils/download';
 import type { RegenerateItemInput } from '@/lib/api/enrichment';
+import { useEmbedMode } from '@/components/embed/embed-provider';
 
 type TabId = 'resume' | 'cover-letter' | 'outreach' | 'jd-match';
 
@@ -83,6 +84,7 @@ const buildInitialData = (t: Translate): ResumeData => ({
 const ResumeBuilderContent = () => {
   const { t } = useTranslations();
   const { uiLanguage, contentLanguage } = useLanguage();
+  const { isEmbedMode, withEmbedHref } = useEmbedMode();
   const [notificationDialog, setNotificationDialog] = useState<{
     title: string;
     description: string;
@@ -594,23 +596,41 @@ const ResumeBuilderContent = () => {
 
   return (
     <div
-      className="h-screen w-full bg-[#F0F0E8] flex justify-center items-center p-4 md:p-8"
-      style={{
-        backgroundImage:
-          'linear-gradient(rgba(29, 78, 216, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(29, 78, 216, 0.1) 1px, transparent 1px)',
-        backgroundSize: '40px 40px',
-      }}
+      className={
+        isEmbedMode
+          ? 'h-full w-full bg-[#F0F0E8] flex flex-col overflow-hidden'
+          : 'h-screen w-full bg-[#F0F0E8] flex justify-center items-center p-4 md:p-8'
+      }
+      data-testid={isEmbedMode ? 'embed-builder' : 'standalone-builder'}
+      style={
+        isEmbedMode
+          ? undefined
+          : {
+              backgroundImage:
+                'linear-gradient(rgba(29, 78, 216, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(29, 78, 216, 0.1) 1px, transparent 1px)',
+              backgroundSize: '40px 40px',
+            }
+      }
     >
       {/* Main Container */}
-      <div className="w-full h-full max-w-[90%] md:max-w-[95%] xl:max-w-[1800px] border border-black bg-[#F0F0E8] shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] flex flex-col">
-        {/* Header Section */}
-        <div className="border-b border-black p-6 md:p-8 bg-[#F0F0E8] no-print">
+      <div
+        className={
+          isEmbedMode
+            ? 'w-full h-full border-0 bg-[#F0F0E8] shadow-none flex flex-col overflow-hidden'
+            : 'w-full h-full max-w-[90%] md:max-w-[95%] xl:max-w-[1800px] border border-black bg-[#F0F0E8] shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] flex flex-col'
+        }
+      >
+        {/* Header Section — inner resume nav retained in embed */}
+        <div
+          className={`border-b border-black bg-[#F0F0E8] no-print ${isEmbedMode ? 'p-4 md:p-5' : 'p-6 md:p-8'}`}
+          data-testid="builder-inner-nav"
+        >
           {/* Top Row: Back button and Actions */}
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6">
             <div>
               <Button
                 variant="link"
-                onClick={() => router.push('/dashboard')}
+                onClick={() => router.push(withEmbedHref('/dashboard'))}
                 className="mb-2 -ml-1"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -924,34 +944,39 @@ const ResumeBuilderContent = () => {
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="p-4 bg-[#F0F0E8] flex justify-between items-center font-mono text-xs text-blue-700 border-t border-black no-print">
-          <span className="uppercase font-bold flex items-center gap-2">
-            <Image
-              src="/logo.svg"
-              alt="Resume Matcher"
-              width={20}
-              height={20}
-              className="w-5 h-5"
-            />
-            {t('builder.footer.moduleLabel')}
-          </span>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-green-700"></div>
+        {/* Footer — hidden in embed (standalone branding chrome) */}
+        {!isEmbedMode && (
+          <div
+            className="p-4 bg-[#F0F0E8] flex justify-between items-center font-mono text-xs text-blue-700 border-t border-black no-print"
+            data-testid="standalone-builder-footer"
+          >
+            <span className="uppercase font-bold flex items-center gap-2">
+              <Image
+                src="/logo.svg"
+                alt="Resume Matcher"
+                width={20}
+                height={20}
+                className="w-5 h-5"
+              />
+              {t('builder.footer.moduleLabel')}
+            </span>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-green-700"></div>
+                <span className="uppercase">
+                  {templateSettings.template === 'swiss-single' ||
+                  templateSettings.template === 'modern'
+                    ? t('builder.footer.singleColumn')
+                    : t('builder.footer.twoColumn')}
+                </span>
+              </div>
+              <span className="text-gray-400">|</span>
               <span className="uppercase">
-                {templateSettings.template === 'swiss-single' ||
-                templateSettings.template === 'modern'
-                  ? t('builder.footer.singleColumn')
-                  : t('builder.footer.twoColumn')}
+                {templateSettings.pageSize === 'A4' ? 'A4' : t('builder.pageSize.usLetter')}
               </span>
             </div>
-            <span className="text-gray-400">|</span>
-            <span className="uppercase">
-              {templateSettings.pageSize === 'A4' ? 'A4' : t('builder.pageSize.usLetter')}
-            </span>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Regenerate Confirmation Dialog */}
