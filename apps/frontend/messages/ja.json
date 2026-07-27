@@ -97,7 +97,18 @@
       "dropzoneTitle": "クリックまたはファイルをドラッグ",
       "dropzoneSubtitle": "PDF、DOC、DOCX（最大 4MB）",
       "tryDifferentFile": "別のファイルを試す",
-      "parsingFailedKeepOpen": "AI 解析に失敗しました。別のファイルを試すか、このダイアログを閉じてください。"
+      "parsingFailedKeepOpen": "AI 解析に失敗しました。別のファイルを試すか、このダイアログを閉じてください。",
+      "phaseUpload": "Uploading file…",
+      "phaseExtract": "Extracting text…",
+      "phaseAi": "AI normalizing…",
+      "aiFailedKeptExtract": "AI normalization failed. Extracted text was kept — retry without re-uploading.",
+      "extractionUnusable": "Extracted text is too thin (possibly a scan). Retry will not help until you upload a text-based PDF/DOCX.",
+      "extractKeptTitle": "Extracted text kept",
+      "charCount": "{count} characters extracted",
+      "sectionHints": "Sections detected: {hints}",
+      "ocrNeeded": "OCR may be needed for this file.",
+      "reasonCode": "Reason: {code}",
+      "retryKeepsExtract": "Retry reuses the stored extract. Your upload is not discarded."
     }
   },
   "builder": {
@@ -275,7 +286,15 @@
         "keywordsExtracted": "抽出キーワード数: {count}",
         "matchesFound": "一致数: {count}",
         "matchRateLabel": "一致率:"
-      }
+      },
+      "analyzing": "Analyzing match…",
+      "analysisFailed": "Could not load JD analysis.",
+      "overallScore": "Overall match",
+      "refreshAnalysis": "Refresh",
+      "matchedKeywords": "Matched keywords",
+      "missingKeywords": "Missing keywords",
+      "noMatchedKeywords": "No matched keywords yet.",
+      "noMissingKeywords": "No missing keywords detected."
     },
     "genericItemForm": {
       "itemLabel": "項目",
@@ -448,8 +467,11 @@
       "coverLetterDownloadFailed": "カバーレターのダウンロードに失敗しました: {error}",
       "outreachSaveFailed": "連絡メールの保存に失敗しました。もう一度お試しください。",
       "coverLetterGenerateFailed": "カバーレターの生成に失敗しました: {error}",
-      "outreachGenerateFailed": "連絡メールの生成に失敗しました: {error}"
-    }
+      "outreachGenerateFailed": "連絡メールの生成に失敗しました: {error}",
+      "saveSuccess": "Resume saved.",
+      "generationInsufficient": "Generated with limited resume data — review carefully before sending."
+    },
+    "lastSaved": "Last saved {time}"
   },
   "enrichment": {
     "title": "履歴書の強化",
@@ -719,7 +741,8 @@
       "failedToLoad": "履歴書データの読み込みに失敗しました。",
       "failedToDelete": "履歴書の削除に失敗しました。もう一度お試しください。"
     },
-    "titlePlaceholder": "履歴書のタイトルを入力..."
+    "titlePlaceholder": "履歴書のタイトルを入力...",
+    "extractedTextTitle": "Extracted text (fallback)"
   },
   "preview": {
     "margins": "余白",

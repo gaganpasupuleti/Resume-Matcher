@@ -97,7 +97,18 @@
       "dropzoneTitle": "Click or Drag File",
       "dropzoneSubtitle": "PDF, DOC, DOCX (Max 4MB)",
       "tryDifferentFile": "Try Different File",
-      "parsingFailedKeepOpen": "AI parsing failed. Try a different file or close this dialog."
+      "parsingFailedKeepOpen": "AI parsing failed. Try a different file or close this dialog.",
+      "phaseUpload": "Uploading file…",
+      "phaseExtract": "Extracting text…",
+      "phaseAi": "AI normalizing…",
+      "aiFailedKeptExtract": "AI normalization failed. Extracted text was kept — retry without re-uploading.",
+      "extractionUnusable": "Extracted text is too thin (possibly a scan). Retry will not help until you upload a text-based PDF/DOCX.",
+      "extractKeptTitle": "Extracted text kept",
+      "charCount": "{count} characters extracted",
+      "sectionHints": "Sections detected: {hints}",
+      "ocrNeeded": "OCR may be needed for this file.",
+      "reasonCode": "Reason: {code}",
+      "retryKeepsExtract": "Retry reuses the stored extract. Your upload is not discarded."
     }
   },
   "builder": {
@@ -275,7 +286,15 @@
         "keywordsExtracted": "{count} keywords extracted",
         "matchesFound": "{count} matches found",
         "matchRateLabel": "Match Rate:"
-      }
+      },
+      "analyzing": "Analyzing match…",
+      "analysisFailed": "Could not load JD analysis.",
+      "overallScore": "Overall match",
+      "refreshAnalysis": "Refresh",
+      "matchedKeywords": "Matched keywords",
+      "missingKeywords": "Missing keywords",
+      "noMatchedKeywords": "No matched keywords yet.",
+      "noMissingKeywords": "No missing keywords detected."
     },
     "genericItemForm": {
       "itemLabel": "Item",
@@ -448,8 +467,11 @@
       "coverLetterDownloadFailed": "Failed to download cover letter: {error}",
       "outreachSaveFailed": "Failed to save outreach message. Please try again.",
       "coverLetterGenerateFailed": "Failed to generate cover letter: {error}",
-      "outreachGenerateFailed": "Failed to generate outreach message: {error}"
-    }
+      "outreachGenerateFailed": "Failed to generate outreach message: {error}",
+      "saveSuccess": "Resume saved.",
+      "generationInsufficient": "Generated with limited resume data — review carefully before sending."
+    },
+    "lastSaved": "Last saved {time}"
   },
   "enrichment": {
     "title": "Resume Enhancement",
@@ -719,7 +741,8 @@
       "failedToLoad": "Failed to load resume data.",
       "failedToDelete": "Failed to delete resume. Please try again."
     },
-    "titlePlaceholder": "Enter resume title..."
+    "titlePlaceholder": "Enter resume title...",
+    "extractedTextTitle": "Extracted text (fallback)"
   },
   "preview": {
     "margins": "Margins",

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -21,7 +21,7 @@ import {
 import { useFileUpload, formatBytes } from '@/hooks/use-file-upload';
 import { getUploadUrl } from '@/lib/api/client';
 import { useTranslations } from '@/lib/i18n';
-import { retryProcessing } from '@/lib/api/resume';
+import { retryProcessing, type ResumeUploadResponse } from '@/lib/api/resume';
 
 interface ResumeUploadDialogProps {
   trigger?: React.ReactNode;
@@ -30,10 +30,12 @@ interface ResumeUploadDialogProps {
   onOpenChange?: (open: boolean) => void;
 }
 
+type UploadPhase = 'idle' | 'uploading' | 'extracting' | 'ai' | 'done';
+
 const ACCEPTED_FILE_TYPES = [
   'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
-  'application/msword', // .doc
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/msword',
 ];
 const MAX_FILE_SIZE = 4 * 1024 * 1024; // 4MB
 
@@ -51,6 +53,11 @@ export function ResumeUploadDialog({
   } | null>(null);
   const [failedResumeId, setFailedResumeId] = useState<string | null>(null);
   const [isRetryingProcessing, setIsRetryingProcessing] = useState(false);
+  const [phase, setPhase] = useState<UploadPhase>('idle');
+  const [lastDiagnostics, setLastDiagnostics] = useState<Partial<ResumeUploadResponse> | null>(
+    null
+  );
+  const phaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const isControlled = controlledOpen !== undefined;
   const isOpen = isControlled ? controlledOpen : internalOpen;
   const setIsOpen = (nextOpen: boolean) => {
@@ -62,6 +69,27 @@ export function ResumeUploadDialog({
 
   const UPLOAD_URL = getUploadUrl();
 
+  useEffect(() => {
+    return () => {
+      phaseTimersRef.current.forEach(clearTimeout);
+      phaseTimersRef.current = [];
+    };
+  }, []);
+
+  const clearPhaseTimers = () => {
+    phaseTimersRef.current.forEach(clearTimeout);
+    phaseTimersRef.current = [];
+  };
+
+  const startProgressPhases = () => {
+    clearPhaseTimers();
+    setPhase('uploading');
+    setLastDiagnostics(null);
+    // Backend does extract then AI in one request — stage the UI so students see both.
+    phaseTimersRef.current.push(setTimeout(() => setPhase('extracting'), 400));
+    phaseTimersRef.current.push(setTimeout(() => setPhase('ai'), 1600));
+  };
+
   const handleUploadSuccess = ({
     resumeId,
     fileId,
@@ -71,21 +99,23 @@ export function ResumeUploadDialog({
     fileId?: string;
     message: string;
   }) => {
+    clearPhaseTimers();
+    setPhase('done');
     setUploadFeedback({ type: 'success', message });
     setFailedResumeId(null);
 
-    // Defer parent state update to avoid setState during render
     setTimeout(() => {
       onUploadComplete?.(resumeId);
     }, 0);
 
-    // Close dialog after a short delay to show success state
     setTimeout(() => {
       setIsOpen(false);
       setUploadFeedback(null);
       setFailedResumeId(null);
+      setPhase('idle');
+      setLastDiagnostics(null);
       if (fileId) {
-        removeFile(fileId); // Clear file for next time
+        removeFile(fileId);
       }
     }, 1500);
   };
@@ -107,21 +137,34 @@ export function ResumeUploadDialog({
     multiple: false,
     uploadUrl: UPLOAD_URL,
     onUploadSuccess: (uploadedFile, response) => {
-      const data = response as {
-        resume_id?: string;
-        processing_status?: 'pending' | 'processing' | 'ready' | 'failed';
-        is_master?: boolean;
-      };
+      clearPhaseTimers();
+      const data = response as ResumeUploadResponse;
+      setLastDiagnostics({
+        reason_code: data.reason_code,
+        extraction_usable: data.extraction_usable,
+        ocr_needed: data.ocr_needed,
+        ai_normalization_status: data.ai_normalization_status,
+        section_hints: data.section_hints,
+        char_count: data.char_count,
+        message: data.message,
+      });
+
       if (data.resume_id) {
         const processingFailed = data.processing_status === 'failed';
         const successMessage = data.is_master
           ? t('dashboard.uploadDialog.successMaster')
           : t('dashboard.uploadDialog.success');
         if (processingFailed) {
-          // Keep dialog open on failure so users can retry processing.
+          setPhase('done');
+          const keptExtract =
+            data.extraction_usable === true ||
+            data.ai_normalization_status === 'failed' ||
+            data.ai_normalization_status === 'unavailable';
           setUploadFeedback({
             type: 'error',
-            message: t('dashboard.uploadDialog.parsingFailedKeepOpen'),
+            message: keptExtract
+              ? t('dashboard.uploadDialog.aiFailedKeptExtract')
+              : t('dashboard.uploadDialog.parsingFailedKeepOpen'),
           });
           setFailedResumeId(data.resume_id);
           return;
@@ -132,6 +175,7 @@ export function ResumeUploadDialog({
           message: successMessage,
         });
       } else {
+        setPhase('done');
         setFailedResumeId(null);
         setUploadFeedback({
           type: 'error',
@@ -140,7 +184,10 @@ export function ResumeUploadDialog({
       }
     },
     onUploadError: (file, errorMsg) => {
+      clearPhaseTimers();
+      setPhase('done');
       setFailedResumeId(null);
+      setLastDiagnostics(null);
       setUploadFeedback({
         type: 'error',
         message: errorMsg || t('dashboard.uploadDialog.failed'),
@@ -150,9 +197,21 @@ export function ResumeUploadDialog({
       if (currentFiles.length === 0) {
         setUploadFeedback(null);
         setFailedResumeId(null);
+        setPhase('idle');
+        setLastDiagnostics(null);
+      } else if (!isUploadingGlobal && phase === 'idle') {
+        // File selected — wait for upload start
       }
     },
   });
+
+  // When upload begins, advance staged progress.
+  useEffect(() => {
+    if (isUploadingGlobal && phase === 'idle') {
+      startProgressPhases();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUploadingGlobal]);
 
   const currentFile = files[0];
   const displayErrors = uploadFeedback?.type === 'error' ? [uploadFeedback.message] : errors;
@@ -166,10 +225,27 @@ export function ResumeUploadDialog({
     const resumeIdToRetry = failedResumeId;
     const fileIdToRemove = currentFile?.id;
     setIsRetryingProcessing(true);
+    setPhase('ai');
     try {
       const result = await retryProcessing(resumeIdToRetry);
+      setLastDiagnostics({
+        reason_code: result.reason_code,
+        extraction_usable: result.extraction_usable,
+        ocr_needed: result.ocr_needed,
+        ai_normalization_status: result.ai_normalization_status,
+        section_hints: result.section_hints,
+        char_count: result.char_count,
+        message: result.message,
+      });
       if (result.processing_status !== 'ready') {
-        setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
+        setPhase('done');
+        setUploadFeedback({
+          type: 'error',
+          message:
+            result.extraction_usable === false
+              ? t('dashboard.uploadDialog.extractionUnusable')
+              : t('dashboard.retryFailed'),
+        });
         return;
       }
 
@@ -180,11 +256,15 @@ export function ResumeUploadDialog({
       });
     } catch (err) {
       console.error('Retry processing failed:', err);
+      setPhase('done');
       setUploadFeedback({ type: 'error', message: t('dashboard.retryFailed') });
     } finally {
       setIsRetryingProcessing(false);
     }
   };
+
+  const showProgress =
+    isUploadingGlobal || isRetryingProcessing || (phase !== 'idle' && phase !== 'done');
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -220,12 +300,29 @@ export function ResumeUploadDialog({
           >
             <input {...getInputProps()} />
 
-            {isUploadingGlobal ? (
-              <div className="flex flex-col items-center py-4">
+            {showProgress ? (
+              <div className="flex flex-col items-center py-2" data-testid="upload-progress">
                 <Loader2Icon className="w-10 h-10 animate-spin text-blue-700 mb-4" />
-                <p className="font-mono text-sm font-bold uppercase text-blue-700">
-                  {t('common.uploading')}
-                </p>
+                <ol className="w-full max-w-xs text-left space-y-2 font-mono text-xs uppercase">
+                  <ProgressStep
+                    active={phase === 'uploading'}
+                    done={phase === 'extracting' || phase === 'ai' || phase === 'done'}
+                    label={t('dashboard.uploadDialog.phaseUpload')}
+                  />
+                  <ProgressStep
+                    active={phase === 'extracting'}
+                    done={phase === 'ai' || phase === 'done'}
+                    label={t('dashboard.uploadDialog.phaseExtract')}
+                  />
+                  <ProgressStep
+                    active={phase === 'ai' || isRetryingProcessing}
+                    done={
+                      phase === 'done' &&
+                      lastDiagnostics?.ai_normalization_status === 'succeeded'
+                    }
+                    label={t('dashboard.uploadDialog.phaseAi')}
+                  />
+                </ol>
               </div>
             ) : currentFile ? (
               <div className="flex items-center justify-between gap-4">
@@ -270,15 +367,51 @@ export function ResumeUploadDialog({
             )}
           </div>
 
-          {/* Feedback Messages */}
           {displayErrors.length > 0 && (
-            <div className="mt-4 p-3 bg-red-50 border border-red-200 flex items-start gap-2 text-red-700 text-sm">
+            <div
+              className="mt-4 p-3 bg-red-50 border border-red-200 flex items-start gap-2 text-red-700 text-sm"
+              data-testid="upload-error"
+            >
               <AlertCircleIcon className="w-5 h-5 shrink-0" />
               <div>
                 {displayErrors.map((err, i) => (
                   <p key={i}>{err}</p>
                 ))}
               </div>
+            </div>
+          )}
+
+          {uploadFeedback?.type === 'error' && lastDiagnostics && (
+            <div
+              className="mt-3 p-3 bg-white border border-black font-mono text-xs space-y-1"
+              data-testid="upload-extract-fallback"
+            >
+              <p className="font-bold uppercase">{t('dashboard.uploadDialog.extractKeptTitle')}</p>
+              {typeof lastDiagnostics.char_count === 'number' && (
+                <p>
+                  {t('dashboard.uploadDialog.charCount', {
+                    count: lastDiagnostics.char_count,
+                  })}
+                </p>
+              )}
+              {lastDiagnostics.section_hints && lastDiagnostics.section_hints.length > 0 && (
+                <p>
+                  {t('dashboard.uploadDialog.sectionHints', {
+                    hints: lastDiagnostics.section_hints.join(', '),
+                  })}
+                </p>
+              )}
+              {lastDiagnostics.ocr_needed && (
+                <p>{t('dashboard.uploadDialog.ocrNeeded')}</p>
+              )}
+              {lastDiagnostics.reason_code && (
+                <p className="text-gray-500">
+                  {t('dashboard.uploadDialog.reasonCode', {
+                    code: lastDiagnostics.reason_code,
+                  })}
+                </p>
+              )}
+              <p className="text-gray-600">{t('dashboard.uploadDialog.retryKeepsExtract')}</p>
             </div>
           )}
 
@@ -297,6 +430,7 @@ export function ResumeUploadDialog({
               className="rounded-none border-black hover:bg-gray-100"
               onClick={handleRetryProcessing}
               disabled={isRetryingProcessing}
+              data-testid="upload-retry-processing"
             >
               {isRetryingProcessing
                 ? t('dashboard.retryingProcessing')
@@ -312,6 +446,8 @@ export function ResumeUploadDialog({
                 if (files[0]) removeFile(files[0].id);
                 setUploadFeedback(null);
                 setFailedResumeId(null);
+                setLastDiagnostics(null);
+                setPhase('idle');
               }}
             >
               {t('dashboard.uploadDialog.tryDifferentFile')}
@@ -325,5 +461,29 @@ export function ResumeUploadDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ProgressStep({
+  active,
+  done,
+  label,
+}: {
+  active: boolean;
+  done: boolean;
+  label: string;
+}) {
+  return (
+    <li
+      className={`flex items-center gap-2 ${
+        active ? 'text-blue-700 font-bold' : done ? 'text-green-700' : 'text-gray-400'
+      }`}
+    >
+      <span
+        className={`w-2 h-2 rounded-full border border-current ${active ? 'bg-blue-700' : done ? 'bg-green-700' : 'bg-transparent'}`}
+        aria-hidden
+      />
+      {label}
+    </li>
   );
 }

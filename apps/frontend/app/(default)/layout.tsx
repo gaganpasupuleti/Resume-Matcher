@@ -11,7 +11,8 @@ export default function DefaultLayout({ children }: { children: React.ReactNode 
         <ResumePreviewProvider>
           <LocalizedErrorBoundary>
             <EmbedProvider>
-              <main className="min-h-screen h-full flex flex-col">{children}</main>
+              {/* Embed root owns h-dvh; standalone keeps min-h-screen */}
+              <main className="min-h-0 h-full flex-1 flex flex-col">{children}</main>
             </EmbedProvider>
           </LocalizedErrorBoundary>
         </ResumePreviewProvider>

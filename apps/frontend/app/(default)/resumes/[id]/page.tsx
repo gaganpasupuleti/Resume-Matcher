@@ -33,6 +33,7 @@ export default function ResumeViewerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus | null>(null);
+  const [extractedText, setExtractedText] = useState<string | null>(null);
   const [isMasterResume, setIsMasterResume] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showDeleteSuccessDialog, setShowDeleteSuccessDialog] = useState(false);
@@ -66,6 +67,14 @@ export default function ResumeViewerPage() {
 
         // Capture title for editable display (always set to clear stale state)
         setResumeTitle(data.title ?? null);
+
+        const rawContent = data.raw_resume?.content?.trim() || '';
+        // Keep extracted markdown when AI structuring failed so retry doesn't lose text.
+        if (rawContent && status === 'failed') {
+          setExtractedText(rawContent);
+        } else {
+          setExtractedText(null);
+        }
 
         // Prioritize processed_resume if available (structured JSON)
         if (data.processed_resume) {
@@ -227,7 +236,7 @@ export default function ResumeViewerPage() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-[#F0F0E8] p-4">
         <div
-          className={`border p-6 text-center max-w-md shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] ${
+          className={`border p-6 text-center max-w-2xl w-full shadow-[4px_4px_0px_0px_rgba(0,0,0,0.1)] ${
             isProcessing
               ? 'bg-blue-50 border-blue-200'
               : isFailed
@@ -251,6 +260,19 @@ export default function ResumeViewerPage() {
           >
             {error || t('resumeViewer.resumeNotFound')}
           </p>
+          {isFailed && extractedText && (
+            <div
+              data-testid="extracted-text-fallback"
+              className="mb-4 text-left border border-black bg-white p-3 max-h-64 overflow-y-auto"
+            >
+              <p className="font-mono text-xs font-bold uppercase mb-2 text-gray-700">
+                {t('resumeViewer.extractedTextTitle')}
+              </p>
+              <pre className="whitespace-pre-wrap font-mono text-xs text-gray-800">
+                {extractedText}
+              </pre>
+            </div>
+          )}
           <div className="flex flex-col gap-2">
             {isFailed && (
               <>

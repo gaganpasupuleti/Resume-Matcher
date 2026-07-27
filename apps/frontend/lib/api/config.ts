@@ -119,6 +119,27 @@ export async function fetchSystemStatus(): Promise<SystemStatus> {
   return res.json();
 }
 
+export interface HealthProbe {
+  status: string;
+  llm: {
+    healthy?: boolean;
+    provider?: string;
+    model?: string;
+    error_code?: string;
+    error?: string;
+    message?: string;
+  };
+}
+
+/** Lightweight /health probe — used to distinguish model-missing vs Ollama down. */
+export async function fetchHealthProbe(): Promise<HealthProbe> {
+  const res = await apiFetch('/health', { credentials: 'include' });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch health (status ${res.status}).`);
+  }
+  return res.json();
+}
+
 // Provider display names and default models
 export const PROVIDER_INFO: Record<
   LLMProvider,

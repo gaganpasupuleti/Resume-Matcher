@@ -26,6 +26,8 @@ from app.schemas import (
     ImproveResumeRequest,
     ImproveResumeResponse,
     ImproveResumeData,
+    JDAnalysisRequest,
+    JDAnalysisResponse,
     RefinementStats,
     ResumeDiffSummary,
     ResumeFieldDiff,
@@ -36,17 +38,24 @@ from app.schemas import (
     ResumeSummary,
     ResumeUploadResponse,
     RawResume,
+    ScoreBreakdownItem,
     UpdateCoverLetterRequest,
     UpdateOutreachMessageRequest,
     UpdateTitleRequest,
     normalize_resume_data,
 )
 from app.llm import get_resume_parse_timeout
+from app.providers.errors import ProviderError
 from app.services.parser import (
+    ExtractionError,
+    ExtractionReason,
+    assess_extracted_text,
+    classify_ai_failure,
+    extract_document,
     get_parse_retries,
-    parse_document,
     parse_resume_to_json,
     restore_dates_from_markdown,
+    validate_upload,
 )
 from app.services.improver import (
     extract_job_keywords,
@@ -57,9 +66,12 @@ from app.services.refiner import refine_resume, calculate_keyword_match
 from app.schemas.refinement import RefinementConfig
 from app.services.cover_letter import (
     generate_cover_letter,
+    generate_cover_letter_result,
     generate_outreach_message,
+    generate_outreach_message_result,
     generate_resume_title,
 )
+from app.services.jd_matcher import analyze_jd_match
 from app.prompts import DEFAULT_IMPROVE_PROMPT_ID, IMPROVE_PROMPT_OPTIONS
 
 
@@ -530,62 +542,71 @@ async def _generate_auxiliary_messages(
 
 router = APIRouter(prefix="/resumes", tags=["Resumes"])
 
-ALLOWED_TYPES = {
-    "application/pdf",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-MAX_FILE_SIZE = 4 * 1024 * 1024  # 4MB
-
 
 @router.post("/upload", response_model=ResumeUploadResponse)
 async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
     """Upload and process a resume file (PDF/DOCX).
 
-    Converts the file to Markdown and stores it in the database.
-    Optionally parses to structured JSON if LLM is configured.
+    Pipeline: validate → deterministic extract → quality gate → Ollama only
+    when text is usable → schema validate → persist structured data when ready.
+    Extract failures never call Ollama. AI failures keep extracted markdown.
     """
-    # Validate file type
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type: {file.content_type}. Allowed: PDF, DOC, DOCX",
-        )
-
-    # Read and validate size
     content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size: {MAX_FILE_SIZE // (1024 * 1024)}MB",
-        )
+    filename = file.filename or "resume.pdf"
 
-    if len(content) == 0:
-        raise HTTPException(status_code=400, detail="Empty file")
-
-    # Convert to markdown
     try:
-        markdown_content = await parse_document(content, file.filename or "resume.pdf")
-    except Exception as e:
-        logger.error(f"Document parsing failed: {e}")
-        raise HTTPException(
-            status_code=422,
-            detail="Failed to parse document. Please ensure it's a valid PDF or DOCX file.",
+        validate_upload(
+            content=content,
+            filename=filename,
+            content_type=file.content_type,
+        )
+        extraction = await extract_document(content, filename)
+    except ExtractionError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+
+    markdown_content = extraction.text
+    diagnostics = extraction.diagnostics
+
+    # Low-text / scanned: persist extract for visibility, skip Ollama, no fake ready.
+    if not diagnostics.usable:
+        resume = await db.create_resume_atomic_master(
+            content=markdown_content,
+            content_type="md",
+            filename=filename,
+            processed_data=None,
+            processing_status="failed",
+            original_markdown=markdown_content,
+            extraction_diagnostics=diagnostics.to_dict(),
+        )
+        return ResumeUploadResponse(
+            message=diagnostics.message,
+            request_id=str(uuid4()),
+            resume_id=resume["resume_id"],
+            processing_status="failed",
+            is_master=resume.get("is_master", False),
+            reason_code=diagnostics.reason_code,
+            extraction_usable=False,
+            ocr_needed=diagnostics.ocr_needed,
+            ai_normalization_status="skipped",
+            section_hints=diagnostics.section_hints,
+            char_count=diagnostics.char_count,
         )
 
-    # Store in database first with "processing" status (atomic master assignment)
-    # original_markdown is preserved permanently for date reference even after
-    # builder saves overwrite `content` with JSON.
+    # Usable extract — store markdown first; structured data only after valid AI parse.
     resume = await db.create_resume_atomic_master(
         content=markdown_content,
         content_type="md",
-        filename=file.filename,
+        filename=filename,
         processed_data=None,
         processing_status="processing",
         original_markdown=markdown_content,
+        extraction_diagnostics=diagnostics.to_dict(),
     )
 
-    # Try to parse to structured JSON (optional, may fail if LLM not configured)
+    ai_status: str = "failed"
+    reason_code = ExtractionReason.OK.value
+    message = f"File {filename} uploaded successfully"
+
     try:
         parse_timeout = get_resume_parse_timeout(retries=get_parse_retries())
         processed_data = await asyncio.wait_for(
@@ -601,29 +622,71 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeUploadResponse:
         )
         resume["processed_data"] = processed_data
         resume["processing_status"] = "ready"
+        ai_status = "succeeded"
     except asyncio.TimeoutError:
         logger.warning(
-            f"Resume parsing to JSON timed out for {file.filename} after {parse_timeout:.0f}s"
+            "Resume parsing to JSON timed out for %s after %.0fs",
+            filename,
+            parse_timeout,
         )
-        db.update_resume(resume["resume_id"], {"processing_status": "failed"})
+        db.update_resume(
+            resume["resume_id"],
+            {
+                "processing_status": "failed",
+                "ai_failure_reason": ExtractionReason.AI_TIMEOUT.value,
+            },
+        )
         resume["processing_status"] = "failed"
+        ai_status = "unavailable"
+        reason_code = ExtractionReason.AI_TIMEOUT.value
+        message = (
+            f"File {filename} uploaded; AI normalization timed out. "
+            "Extracted text was kept — you can retry."
+        )
     except Exception as e:
-        # LLM parsing failed, update status to failed
-        logger.warning(f"Resume parsing to JSON failed for {file.filename}: {e}")
-        db.update_resume(resume["resume_id"], {"processing_status": "failed"})
+        # Keep extracted markdown; never discard upload on AI failure.
+        mapped = classify_ai_failure(e)
+        logger.warning(
+            "Resume parsing to JSON failed for %s (%s): %s",
+            filename,
+            mapped.value,
+            type(e).__name__,
+        )
+        db.update_resume(
+            resume["resume_id"],
+            {
+                "processing_status": "failed",
+                "ai_failure_reason": mapped.value,
+            },
+        )
         resume["processing_status"] = "failed"
+        ai_status = (
+            "unavailable"
+            if mapped
+            in (
+                ExtractionReason.AI_UNAVAILABLE,
+                ExtractionReason.AI_TIMEOUT,
+            )
+            else "failed"
+        )
+        reason_code = mapped.value
+        message = (
+            f"File {filename} uploaded; AI normalization unavailable. "
+            "Extracted text was kept — you can retry."
+        )
 
-    # Return accurate status to client (API-001 fix)
     return ResumeUploadResponse(
-        message=(
-            f"File {file.filename} uploaded successfully"
-            if resume["processing_status"] == "ready"
-            else f"File {file.filename} uploaded but parsing failed"
-        ),
+        message=message,
         request_id=str(uuid4()),
         resume_id=resume["resume_id"],
         processing_status=resume["processing_status"],
         is_master=resume.get("is_master", False),
+        reason_code=reason_code if resume["processing_status"] != "ready" else None,
+        extraction_usable=True,
+        ocr_needed=False,
+        ai_normalization_status=ai_status,  # type: ignore[arg-type]
+        section_hints=diagnostics.section_hints,
+        char_count=diagnostics.char_count,
     )
 
 
@@ -1411,6 +1474,7 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
 
     Re-runs parse_resume_to_json() on the stored markdown content.
     Works for resumes with processing_status == "failed" or "processing".
+    Skips Ollama when stored extract is still unusable (low-text / OCR needed).
     """
     resume = db.get_resume(resume_id)
     if not resume:
@@ -1422,11 +1486,36 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             detail="Only resumes with 'failed' or 'processing' status can be retried.",
         )
 
-    markdown_content = resume.get("content", "")
+    markdown_content = resume.get("original_markdown") or resume.get("content", "")
     if not markdown_content:
         raise HTTPException(
             status_code=400,
             detail="Resume has no stored content to re-process.",
+        )
+
+    diagnostics = assess_extracted_text(
+        markdown_content, filename=resume.get("filename")
+    )
+    if not diagnostics.usable:
+        db.update_resume(
+            resume_id,
+            {
+                "processing_status": "failed",
+                "extraction_diagnostics": diagnostics.to_dict(),
+            },
+        )
+        return ResumeUploadResponse(
+            message=diagnostics.message,
+            request_id=str(uuid4()),
+            resume_id=resume_id,
+            processing_status="failed",
+            is_master=resume.get("is_master", False),
+            reason_code=diagnostics.reason_code,
+            extraction_usable=False,
+            ocr_needed=diagnostics.ocr_needed,
+            ai_normalization_status="skipped",
+            section_hints=diagnostics.section_hints,
+            char_count=diagnostics.char_count,
         )
 
     try:
@@ -1448,28 +1537,62 @@ async def retry_processing(resume_id: str) -> ResumeUploadResponse:
             resume_id=resume_id,
             processing_status="ready",
             is_master=resume.get("is_master", False),
+            extraction_usable=True,
+            ai_normalization_status="succeeded",
+            section_hints=diagnostics.section_hints,
+            char_count=diagnostics.char_count,
         )
     except asyncio.TimeoutError:
         logger.warning(
-            f"Retry processing timed out for resume {resume_id} after {parse_timeout:.0f}s"
+            "Retry processing timed out for resume %s after %.0fs",
+            resume_id,
+            parse_timeout,
         )
-        db.update_resume(resume_id, {"processing_status": "failed"})
+        db.update_resume(
+            resume_id,
+            {
+                "processing_status": "failed",
+                "ai_failure_reason": ExtractionReason.AI_TIMEOUT.value,
+            },
+        )
         return ResumeUploadResponse(
-            message="Retry processing timed out",
+            message="Retry processing timed out. Extracted text was kept.",
             request_id=str(uuid4()),
             resume_id=resume_id,
             processing_status="failed",
             is_master=resume.get("is_master", False),
+            reason_code=ExtractionReason.AI_TIMEOUT.value,
+            extraction_usable=True,
+            ai_normalization_status="unavailable",
+            section_hints=diagnostics.section_hints,
+            char_count=diagnostics.char_count,
         )
     except Exception as e:
-        logger.warning(f"Retry processing failed for resume {resume_id}: {e}")
-        db.update_resume(resume_id, {"processing_status": "failed"})
+        mapped = classify_ai_failure(e)
+        logger.warning(
+            "Retry processing failed for resume %s (%s): %s",
+            resume_id,
+            mapped.value,
+            type(e).__name__,
+        )
+        db.update_resume(
+            resume_id,
+            {
+                "processing_status": "failed",
+                "ai_failure_reason": mapped.value,
+            },
+        )
         return ResumeUploadResponse(
-            message="Retry processing failed",
+            message="AI normalization unavailable. Extracted text was kept — you can retry.",
             request_id=str(uuid4()),
             resume_id=resume_id,
             processing_status="failed",
             is_master=resume.get("is_master", False),
+            reason_code=mapped.value,
+            extraction_usable=True,
+            ai_normalization_status="unavailable",
+            section_hints=diagnostics.section_hints,
+            char_count=diagnostics.char_count,
         )
 
 
@@ -1483,20 +1606,20 @@ async def update_cover_letter(
         raise HTTPException(status_code=404, detail="Resume not found")
 
     db.update_resume(resume_id, {"cover_letter": request.content})
-    return {"message": "Cover letter updated successfully"}
+    return {"message": "Cover letter updated successfully", "editable": True}
 
 
 @router.patch("/{resume_id}/outreach-message")
 async def update_outreach_message(
     resume_id: str, request: UpdateOutreachMessageRequest
 ) -> dict:
-    """Update the outreach message for a resume."""
+    """Update the outreach / application email for a resume."""
     resume = db.get_resume(resume_id)
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
     db.update_resume(resume_id, {"outreach_message": request.content})
-    return {"message": "Outreach message updated successfully"}
+    return {"message": "Outreach message updated successfully", "editable": True}
 
 
 @router.patch("/{resume_id}/title")
@@ -1509,6 +1632,54 @@ async def update_title(resume_id: str, request: UpdateTitleRequest) -> dict:
     title = request.title.strip()[:80]
     db.update_resume(resume_id, {"title": title})
     return {"message": "Title updated successfully"}
+
+
+@router.post("/{resume_id}/jd-analysis", response_model=JDAnalysisResponse)
+async def jd_analysis_endpoint(
+    resume_id: str,
+    request: JDAnalysisRequest,
+) -> JDAnalysisResponse:
+    """Deterministic JD match analysis with optional Ollama enhancement."""
+    resume = db.get_resume(resume_id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    resume_data = resume.get("processed_data")
+    if not resume_data or not isinstance(resume_data, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Resume has no processed data. Upload and wait for processing.",
+        )
+
+    job = db.get_job(request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = await analyze_jd_match(
+        resume_data,
+        job.get("content") or "",
+        use_ollama=request.use_ollama,
+    )
+
+    return JDAnalysisResponse(
+        overall_score=float(result.get("overall_score") or 0),
+        breakdown=[
+            ScoreBreakdownItem(**item) for item in (result.get("breakdown") or [])
+        ],
+        matched_keywords=list(result.get("matched_keywords") or []),
+        missing_keywords=list(result.get("missing_keywords") or []),
+        strengths=list(result.get("strengths") or []),
+        gaps=list(result.get("gaps") or []),
+        recommendations=list(result.get("recommendations") or []),
+        warnings=list(result.get("warnings") or []),
+        sections_present=dict(result.get("sections_present") or {}),
+        enhancement_status=str(result.get("enhancement_status") or "skipped"),
+        cached=bool(result.get("cached")),
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
+        cache_key=result.get("cache_key"),
+        enhancement=result.get("enhancement"),
+    )
 
 
 @router.post(
@@ -1563,30 +1734,48 @@ async def generate_cover_letter_endpoint(resume_id: str) -> GenerateContentRespo
     # Get language setting
     language = _get_content_language()
 
-    # Generate cover letter
     try:
-        cover_letter_content = await generate_cover_letter(
+        result = await generate_cover_letter_result(
             resume_data, job["content"], language
         )
+    except ProviderError as e:
+        logger.error(
+            "Cover letter generation provider error correlation_id=%s error_code=%s",
+            e.correlation_id,
+            e.error_code,
+        )
+        raise HTTPException(
+            status_code=503 if e.error_code == "unavailable" else 500,
+            detail={
+                "message": "Failed to generate cover letter. Please try again.",
+                "error_code": e.error_code,
+                "correlation_id": e.correlation_id,
+            },
+        )
     except Exception as e:
-        logger.error(f"Cover letter generation failed: {e}")
+        logger.error("Cover letter generation failed: %s", type(e).__name__)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate cover letter. Please try again.",
         )
 
-    # Save to resume record
-    db.update_resume(resume_id, {"cover_letter": cover_letter_content})
+    if result.get("content"):
+        db.update_resume(resume_id, {"cover_letter": result["content"]})
 
     return GenerateContentResponse(
-        content=cover_letter_content,
-        message="Cover letter generated successfully",
+        content=result.get("content") or "",
+        message=str(result.get("message") or "Cover letter generated successfully"),
+        warnings=list(result.get("warnings") or []),
+        insufficient=bool(result.get("insufficient")),
+        editable=True,
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
     )
 
 
 @router.post("/{resume_id}/generate-outreach", response_model=GenerateContentResponse)
 async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
-    """Generate an outreach message on-demand for an existing tailored resume.
+    """Generate an application / outreach email on-demand for a tailored resume.
 
     This endpoint allows users to generate a cold outreach message after a resume
     has been tailored. It requires:
@@ -1634,24 +1823,44 @@ async def generate_outreach_endpoint(resume_id: str) -> GenerateContentResponse:
     # Get language setting
     language = _get_content_language()
 
-    # Generate outreach message
     try:
-        outreach_content = await generate_outreach_message(
+        result = await generate_outreach_message_result(
             resume_data, job["content"], language
         )
+    except ProviderError as e:
+        logger.error(
+            "Outreach generation provider error correlation_id=%s error_code=%s",
+            e.correlation_id,
+            e.error_code,
+        )
+        raise HTTPException(
+            status_code=503 if e.error_code == "unavailable" else 500,
+            detail={
+                "message": "Failed to generate outreach message. Please try again.",
+                "error_code": e.error_code,
+                "correlation_id": e.correlation_id,
+            },
+        )
     except Exception as e:
-        logger.error(f"Outreach message generation failed: {e}")
+        logger.error("Outreach message generation failed: %s", type(e).__name__)
         raise HTTPException(
             status_code=500,
             detail="Failed to generate outreach message. Please try again.",
         )
 
-    # Save to resume record
-    db.update_resume(resume_id, {"outreach_message": outreach_content})
+    if result.get("content"):
+        db.update_resume(resume_id, {"outreach_message": result["content"]})
 
     return GenerateContentResponse(
-        content=outreach_content,
-        message="Outreach message generated successfully",
+        content=result.get("content") or "",
+        message=str(
+            result.get("message") or "Application email generated successfully"
+        ),
+        warnings=list(result.get("warnings") or []),
+        insufficient=bool(result.get("insufficient")),
+        editable=True,
+        correlation_id=result.get("correlation_id"),
+        provider=result.get("provider"),
     )
 
 

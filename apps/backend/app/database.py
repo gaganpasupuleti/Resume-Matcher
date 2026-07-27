@@ -67,6 +67,7 @@ class Database:
         outreach_message: str | None = None,
         title: str | None = None,
         original_markdown: str | None = None,
+        extraction_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new resume entry.
 
@@ -92,6 +93,8 @@ class Database:
         }
         if original_markdown is not None:
             doc["original_markdown"] = original_markdown
+        if extraction_diagnostics is not None:
+            doc["extraction_diagnostics"] = extraction_diagnostics
         self.resumes.insert(doc)
         return doc
 
@@ -105,6 +108,7 @@ class Database:
         cover_letter: str | None = None,
         outreach_message: str | None = None,
         original_markdown: str | None = None,
+        extraction_diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new resume with atomic master assignment.
 
@@ -136,6 +140,7 @@ class Database:
                 cover_letter=cover_letter,
                 outreach_message=outreach_message,
                 original_markdown=original_markdown,
+                extraction_diagnostics=extraction_diagnostics,
             )
 
     def get_resume(self, resume_id: str) -> dict[str, Any] | None:

@@ -14,6 +14,8 @@ export type EmbedUiState =
   | 'loading'
   | 'backend-unavailable'
   | 'connector-unavailable'
+  | 'ollama-unavailable'
+  | 'model-missing'
   | 'parsing-failed';
 
 export function EmbedStatusBanner({
@@ -73,6 +75,59 @@ export function EmbedStatusBanner({
           <span>
             Local AI (Ollama) is not ready. Pair the Code Quest Local Connector or configure Ollama
             in settings.
+          </span>
+        </div>
+        <Link href={settingsHref}>
+          <Button variant="outline" size="sm">
+            Settings
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+
+  if (state === 'ollama-unavailable') {
+    return (
+      <div
+        data-testid="embed-state-ollama-unavailable"
+        className="shrink-0 border-b-2 border-amber-600 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+        role="alert"
+      >
+        <div className="flex items-center gap-3 font-mono text-sm text-amber-900">
+          <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
+          <span>
+            Ollama is unreachable. Start Ollama locally, then retry. No cloud providers are enabled
+            in this build.
+          </span>
+        </div>
+        <div className="flex gap-2">
+          {onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              <RefreshCw className="w-4 h-4" />
+              Retry
+            </Button>
+          )}
+          <Link href={settingsHref}>
+            <Button variant="outline" size="sm">
+              Settings
+            </Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === 'model-missing') {
+    return (
+      <div
+        data-testid="embed-state-model-missing"
+        className="shrink-0 border-b-2 border-amber-600 bg-amber-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3"
+        role="alert"
+      >
+        <div className="flex items-center gap-3 font-mono text-sm text-amber-900">
+          <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden />
+          <span>
+            The configured Ollama model is not installed. Pull the model in Settings, then retry.
           </span>
         </div>
         <Link href={settingsHref}>
